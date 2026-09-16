@@ -1,0 +1,6 @@
+{
+  "provider": "siliconflow",
+  "base_url": "https://api.siliconflow.cn/v1",
+  "model": "BAAI/bge-m3",
+  "api_key": "在这里填入你的 Embedding API key（知识库功能用，免费注册即可）"
+}

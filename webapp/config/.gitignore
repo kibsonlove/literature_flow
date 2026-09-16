@@ -1,0 +1,4 @@
+# 本地设置（含 API key，明文），切勿提交
+settings.json
+temp/
+__pycache__/

@@ -1,0 +1,5 @@
+{
+  "model": "deepseek-chat",
+  "base_url": "https://api.deepseek.com",
+  "api_key": "在这里填入你的 LLM API key"
+}
