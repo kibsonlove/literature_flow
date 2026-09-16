@@ -24,3 +24,6 @@ notes/*
 !notes/.gitkeep
 reports/*
 !reports/.gitkeep
+_build/
+dist/
+build/
