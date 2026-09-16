@@ -155,12 +155,47 @@ _PROMPT = """下面是一篇学术文献的标题与正文开头。请判断它�
 __SAMPLE__
 """
 
-def generate_domain_pack(title, sample, log=lambda m: None):
-    """调用 LLM 生成领域包（用 DeepSeek API，成本极低）。返回 cfg 或抛异常。"""
-    from .read import _llm_chat          # 复用 settings.json 里的 API 配置
-    log("领域未识别，正在让模型生成新的领域包…")
+def _html_to_text(h):
+    """把网页端回答的 HTML 片段剥成纯文本（提取 JSON 用）。"""
+    import html as _html
+    t = re.sub(r"<(script|style)[\s\S]*?</\1>", " ", h or "", flags=re.I)
+    t = re.sub(r"<br\s*/?>", "\n", t, flags=re.I)
+    t = re.sub(r"</(p|div|li|tr|h[1-6]|pre|table)>", "\n", t, flags=re.I)
+    t = re.sub(r"<[^>]+>", " ", t)
+    return _html.unescape(t)
+
+def _domain_backend():
+    """领域包生成后端：settings.json 可选 domain_backend=api|webchat；
+    缺省 auto——配了 API key 走 API，否则走网页端（零 API 费）。"""
+    try:
+        from .config import load_settings
+        s = load_settings()
+    except Exception:
+        s = {}
+    b = (s.get("domain_backend") or "auto").strip().lower()
+    if b in ("api", "webchat"):
+        return b
+    return "api" if s.get("has_key") else "webchat"
+
+def generate_domain_pack(title, sample, log=lambda m: None, backend=None):
+    """调用 LLM 生成领域包。backend=api（settings.json 里的 API）或
+    webchat（网页端 LLM，零 API 费，复用已登录的 DeepSeek 浏览器）。
+    缺省按 _domain_backend() 自动选。返回 cfg 或抛异常。"""
+    backend = (backend or _domain_backend()).lower()
     prompt = _PROMPT.replace("__TITLE__", title[:200]).replace("__SAMPLE__", (sample or "")[:2500])
-    raw = _llm_chat(prompt)
+    if backend == "webchat":
+        log("领域未识别，正在通过网页端 LLM（零 API 费）生成新领域包…")
+        from .webchat import WebChatTextSession
+        s = WebChatTextSession(headless=False, log=log)
+        s.open()
+        try:
+            raw = _html_to_text(s.ask(prompt))
+        finally:
+            s.close()
+    else:
+        from .read import _llm_chat          # 复用 settings.json 里的 API 配置
+        log("领域未识别，正在让模型生成新的领域包…")
+        raw = _llm_chat(prompt)
     m = re.search(r"\{[\s\S]*\}", raw)
     if not m:
         raise RuntimeError("模型未返回 JSON")
