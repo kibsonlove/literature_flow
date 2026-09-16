@@ -17,6 +17,7 @@
 3. **启动**：双击 `webapp\start.bat`（或 `webapp` 目录下运行 `uvicorn app:app --port 8000`），浏览器自动打开 `http://127.0.0.1:8000`。
 
 > 可选：MinerU 结构化解析（长文精读/知识库分块用）——在 `webapp/core/mineru_key.txt` 里放入你的 MinerU 平台 key，不放则相关功能自动降级。
+> 可选：网页端功能（WebChat 精读/长文/领域包自动生成，零 API 费）——playwright 已含在 requirements.txt，只需在虚拟环境里执行 `playwright install chromium` 下载浏览器内核；首次使用会弹出浏览器登录一次。
 > 详细上手、常见错误排查见 **`docs/项目架构与上手指南.md`**。
 
 ## 目录速览

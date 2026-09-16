@@ -33,6 +33,19 @@ PROFILE_DIR = (os.environ.get("WEBCHAT_PROFILE_DIR")
                or os.path.join(_APP_DIR, "cache", "webchat_profile"))
 DEEPSEEK_URL = "https://chat.deepseek.com"
 
+def _apply_browser_path():
+    """仅当配置的浏览器目录里确实装过内核（chromium-* 子目录）时才覆盖
+    Playwright 的查找路径；否则保留默认位置——这样新用户直接
+    `playwright install chromium` 装到系统默认目录即可使用。"""
+    try:
+        if os.path.isdir(BROWSER_DIR) and any(
+            d.startswith("chromium") and os.path.isdir(os.path.join(BROWSER_DIR, d))
+            for d in os.listdir(BROWSER_DIR)
+        ):
+            os.environ["PLAYWRIGHT_BROWSERS_PATH"] = BROWSER_DIR
+    except Exception:
+        pass
+
 
 def run_webchat(pdf_path, prompt, title="", headless=False, timeout=300, log=None, url=None):
     """打开网页端 LLM，上传 PDF、发送 prompt，返回抓取到的 Markdown/文本回答。
@@ -55,7 +68,7 @@ def run_webchat(pdf_path, prompt, title="", headless=False, timeout=300, log=Non
         raise RuntimeError(f"找不到 PDF：{pdf_path}")
 
     os.makedirs(PROFILE_DIR, exist_ok=True)
-    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = BROWSER_DIR
+    _apply_browser_path()
 
     with sync_playwright() as p:
         say("启动浏览器（复用登录态 profile）…")
@@ -679,7 +692,7 @@ class WebChatSession:
         from playwright.sync_api import sync_playwright
 
         os.makedirs(PROFILE_DIR, exist_ok=True)
-        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = BROWSER_DIR
+        _apply_browser_path()
         self._pw = sync_playwright().start()
         try:
             self._ctx = self._pw.chromium.launch_persistent_context(
@@ -763,7 +776,7 @@ class WebChatTextSession:
         from playwright.sync_api import sync_playwright
 
         os.makedirs(PROFILE_DIR, exist_ok=True)
-        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = BROWSER_DIR
+        _apply_browser_path()
         self._pw = sync_playwright().start()
         try:
             self._ctx = self._pw.chromium.launch_persistent_context(
