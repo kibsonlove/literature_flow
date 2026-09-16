@@ -1,4 +1,8 @@
-# 本地设置（含 API key，明文），切勿提交
+# 本目录下的真实配置（含密钥/本机路径）全部不入库——主要由项目根 .gitignore 负责，这里再兜底一层
 settings.json
+embedding.json
+paths.json
+domain.json
+domains/
 temp/
 __pycache__/
