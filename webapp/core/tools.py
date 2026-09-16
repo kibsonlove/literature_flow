@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""工具箱：把根目录/notes 的维护脚本统一收编为 webapp 白名单运行器。
+"""工具箱：把 scripts/ 下的维护脚本统一收编为 webapp 白名单运行器。
 
 两层安全：
 1. 只能运行白名单里的脚本；
@@ -14,16 +14,16 @@ ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
 PYTHON = sys.executable
 REPORTS = os.path.join(ROOT, "reports")
 
-# tool → (脚本相对路径, 是否变更类)
+# tool → (脚本相对路径, 是否变更类)。路径相对项目根，须与项目根下 scripts/ 的实际结构一致。
 TOOLS = {
-    "lit_watch":    ("lit_watch.py", False),
-    "coverage":     (r"notes\build_coverage.py", False),
-    "digest":       (r"notes\build_digest.py", False),
-    "pack":         (r"notes\build_pack.py", False),
-    "tag_analysis": ("tag_analysis.py", False),
-    "verify_tags":  ("verify_tags.py", False),
-    "dedup":        ("zot_dedup.py", True),
-    "tag_merge":    ("zot_tag_merge.py", True),
+    "lit_watch":    ("scripts/subscribe/lit_watch.py", False),
+    "coverage":     ("scripts/pipeline/build_coverage.py", False),
+    "digest":       ("scripts/pipeline/build_digest.py", False),
+    "pack":         ("scripts/pipeline/build_pack.py", False),
+    "tag_analysis": ("scripts/tags/tag_analysis.py", False),
+    "verify_tags":  ("scripts/tags/verify_tags.py", False),
+    "dedup":        ("scripts/dedup/zot_dedup.py", True),
+    "tag_merge":    ("scripts/tags/zot_tag_merge.py", True),
 }
 
 # 运行成功后值得展示/打开的产物
@@ -37,9 +37,15 @@ def run_tool(tool, apply=False, timeout=600, log=None):
     if tool not in TOOLS:
         return {"ok": False, "error": f"未知工具：{tool}"}
     script, mutating = TOOLS[tool]
+    path = os.path.join(ROOT, script)
+    if not os.path.isfile(path):
+        # 明确报"脚本不在"，而不是把 python 的 "can't open file" 原样丢给用户
+        return {"ok": False, "tool": tool, "error":
+                f"脚本未找到：{script}\n"
+                f"请确认项目根目录下存在该文件；部分个人分析脚本默认不随仓库分发。"}
     if mutating and not apply:
         pass  # dry-run 即默认行为
-    args = [PYTHON, os.path.join(ROOT, script)]
+    args = [PYTHON, path]
     if mutating and apply:
         args.append("--apply")
     # 子进程统一 UTF-8 输出（否则 Windows 下 GBK 输出经 utf-8 解码即乱码）
@@ -58,9 +64,9 @@ def run_tool(tool, apply=False, timeout=600, log=None):
         return {"ok": False, "tool": tool, "error": "运行超时"}
     except Exception as e:
         return {"ok": False, "tool": tool, "error": repr(e)[:150]}
-    if tool in OUTPUTS:
-        label, path = OUTPUTS[tool]
-        info["output_file"] = path
+    if info["ok"] and tool in OUTPUTS:
+        label, out_path = OUTPUTS[tool]
+        info["output_file"] = out_path
         info["output_label"] = label
     if log:
         log(f"[tool:{tool}] code={info.get('code')}")

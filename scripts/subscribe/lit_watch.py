@@ -11,7 +11,8 @@ _ROOT = os.path.dirname(os.path.dirname(_BASE))
 
 def _load_keywords():
     try:
-        kws = [l.strip() for l in open(os.path.join(_BASE, "lit_keywords.txt"), encoding="utf-8") if l.strip()]
+        kws = [l.strip() for l in open(os.path.join(_BASE, "lit_keywords.txt"), encoding="utf-8")
+               if l.strip() and not l.startswith("#")]
         if kws:
             return kws
     except Exception:

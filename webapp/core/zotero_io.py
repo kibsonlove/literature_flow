@@ -1,17 +1,36 @@
 # -*- coding: utf-8 -*-
-"""Zotero 回写封装（复用 zot_write.py 的本地 API 逻辑）。"""
+"""Zotero 回写封装（本地 API，localhost:23119）。"""
+import json
 import os
 
 from pyzotero import zotero
 
-KEY_DIR = r"C:\Users\PC\.workbuddy\skills\zotero-research-assistant"
+_APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # webapp/
+
+
+def _paths_cfg():
+    try:
+        with open(os.path.join(_APP_DIR, "config", "paths.json"), encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
 
 
 def _client():
-    key = open(os.path.join(KEY_DIR, ".local_key"), encoding="utf-8").read().strip()
-    sid_path = os.path.join(KEY_DIR, ".server_id")
-    sid = open(sid_path, encoding="utf-8").read().strip() if os.path.exists(sid_path) else None
-    return zotero.Zotero("0", "user", None, local=True, local_api_key=key, server_id=sid)
+    """连接 Zotero 本地 API。
+
+    本地 API 只监听本机，且不校验 key（实测：不带 key / 传错误 key 均返回 200），
+    所以默认零配置即可连上。若你的环境确需鉴权，可用环境变量
+    ZOTERO_LOCAL_API_KEY / ZOTERO_SERVER_ID，或写进 config/paths.json 的
+    zotero_local_api_key / zotero_server_id 两键。
+    """
+    cfg = _paths_cfg()
+    key = (os.environ.get("ZOTERO_LOCAL_API_KEY")
+           or cfg.get("zotero_local_api_key") or "local")
+    sid = (os.environ.get("ZOTERO_SERVER_ID")
+           or cfg.get("zotero_server_id") or None)
+    return zotero.Zotero("0", "user", None, local=True,
+                         local_api_key=key, server_id=sid)
 
 
 def add_note(parent, html, title=""):

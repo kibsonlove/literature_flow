@@ -7,7 +7,7 @@
 
 领域包字段（缺失时用通用默认值）：
     name          包标识（slug）
-    label         展示名，如「植物考古（六维）」
+    label         展示名，如「某学科（六维）」
     domain        领域身份描述（拼入助手身份句）
     app_title     webapp 顶栏标题
     dimensions    证据维度名列表

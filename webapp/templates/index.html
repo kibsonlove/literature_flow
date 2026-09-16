@@ -58,7 +58,7 @@
     <div id="webchatRow" class="row hidden">
       <span class="muted">网页端地址：</span>
       <input id="webchatUrl" type="text" value="https://chat.deepseek.com" placeholder="https://chat.deepseek.com">
-      <span class="muted">需先用 login_deepseek.py 登录该站点</span>
+      <span class="muted">首次需在 webapp 目录运行 python login_deepseek.py 登录一次</span>
     </div>
     <div id="genStatus" class="status"></div>
   </section>
@@ -196,7 +196,7 @@
         <button id="kbClose" class="ghost">✕</button>
       </div>
       <div class="row">
-        <input id="kbQuery" style="flex:1" placeholder="用自然语言提问，如：哪里报告过炭化水稻的出土概率？">
+        <input id="kbQuery" style="flex:1" placeholder="用自然语言提问，如：哪篇文献报告过这一现象？">
         <button id="kbSearchBtn" class="primary">检索</button>
         <button id="kbIndexBtn" class="ghost">更新索引</button>
       </div>
@@ -225,10 +225,7 @@
         <button id="toolSnapshot" class="ghost">⑤ 补建 MinerU 子笔记</button>
       </div>
       <div class="row">
-        <span class="muted">产物（reports/）：</span>
-        <a href="/reports/文献订阅_候选清单.md" target="_blank">订阅清单</a> ·
-        <a href="/reports/覆盖矩阵与选题机会.html" target="_blank">覆盖矩阵</a> ·
-        <a href="/reports/文献库体检报告.html" target="_blank">体检报告</a>
+        <span class="muted">产物统一写在 reports/ 目录，见下方「reports 目录」列表（打开面板时自动刷新）。</span>
       </div>
 
       <h3>库维护（变更类脚本默认 dry-run，应用需确认）</h3>
@@ -256,7 +253,7 @@
     </div>
     <textarea id="noteEditor" spellcheck="false"></textarea>
     <div class="row">
-      <input id="tagsInput" type="text" placeholder="标签，空格分隔，如 #rice #Neolithic">
+      <input id="tagsInput" type="text" placeholder="标签，空格分隔，如 #关键词一 #关键词二">
       <button id="writeBtn" class="primary">确认回写 Zotero</button>
     </div>
     <div id="writeStatus" class="status"></div>

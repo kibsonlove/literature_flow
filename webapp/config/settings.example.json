@@ -1,5 +1,6 @@
 {
+  "_comment": "复制本文件为 settings.json 并填入 api_key。model/base_url 可换成任意 openai 兼容服务。api_key 留空时界面会提示未配置。",
   "model": "deepseek-chat",
   "base_url": "https://api.deepseek.com",
-  "api_key": "在这里填入你的 LLM API key"
+  "api_key": ""
 }

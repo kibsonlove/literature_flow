@@ -1,0 +1,6 @@
+# 复制本文件为 lit_journals.txt 后使用。每行一条正则（用于匹配期刊名），# 开头的行为注释。
+# 命中者在候选清单中标记为重点期刊。
+
+Journal of Archaeological Science
+Antiquity
+Vegetation History and Archaeobotany

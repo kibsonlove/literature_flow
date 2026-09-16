@@ -1,0 +1,6 @@
+# 复制本文件为 lit_keywords.txt 后使用。每行一个检索关键词，# 开头的行为注释。
+# 留空（或只留注释）时订阅脚本会使用占位词，不会真正发起检索。
+
+plant remains
+flotation
+crop domestication

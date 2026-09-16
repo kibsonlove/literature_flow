@@ -1,4 +1,5 @@
 {
+  "_comment": "复制本文件为 paths.json。下面两行是格式示范，必须改成你自己电脑上的真实路径，否则读不到 Zotero 里的 PDF。",
   "zotero_data_dir": "C:/Users/你的用户名/Zotero",
   "zotero_exe": "C:/Program Files/Zotero/zotero.exe"
 }

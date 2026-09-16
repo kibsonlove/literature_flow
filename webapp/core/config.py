@@ -24,6 +24,15 @@ DEFAULTS = {
 }
 
 
+def _placeholder(v):
+    """是否为"未填写"的占位值：空串、纯空白，或模板里残留的中文提示语。
+    后者若不识别，会让界面误显示"已配置密钥"。"""
+    s = (v or "").strip()
+    if not s:
+        return True
+    return any("\u4e00" <= ch <= "\u9fff" for ch in s)
+
+
 def load_settings():
     if not os.path.exists(SETTINGS_PATH):
         d = dict(DEFAULTS)
@@ -35,10 +44,10 @@ def load_settings():
             d = dict(DEFAULTS)
     d.setdefault("model", DEFAULTS["model"])
     d.setdefault("base_url", DEFAULTS["base_url"])
-    d["has_key"] = bool(d.get("api_key"))
-    if d.get("api_key"):
-        k = d["api_key"]
-        d["api_key_masked"] = ("*" * max(0, len(k) - 4)) + k[-4:] if len(k) > 4 else "****"
+    key = (d.get("api_key") or "").strip()
+    d["has_key"] = not _placeholder(key)
+    if d["has_key"]:
+        d["api_key_masked"] = ("*" * max(0, len(key) - 4)) + key[-4:] if len(key) > 4 else "****"
     return d
 
 

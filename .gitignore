@@ -2,6 +2,7 @@ __pycache__/
 *.pyc
 *.log
 .cache/
+.idea/
 _trash_*/
 webapp/cache/
 webapp/config/settings.json
@@ -13,9 +14,14 @@ webapp/core/mineru_key.txt
 scripts/subscribe/lit_keywords.txt
 archive/
 docs/research/
-scripts/pipeline/
-scripts/dedup/
-scripts/tags/
+# scripts/：只分发通用脚本；含个人研究内容或数据的文件继续排除
+scripts/pipeline/*
+!scripts/pipeline/build_pack.py
+scripts/dedup/*
+!scripts/dedup/dedup_plan.py
+!scripts/dedup/zot_dedup.py
+scripts/tags/*
+!scripts/tags/tag_analysis.py
 scripts/subscribe/lit_journals.txt
 webapp/config/domain.json
 notes/.gitkeep

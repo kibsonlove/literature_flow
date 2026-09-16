@@ -5,4 +5,8 @@ openai
 markdown
 pyzotero
 PyMuPDF
+numpy
+
+# 可选：使用「网页端 WebChat」后端（零 API 费用）时需要。
+# 装完还需下载浏览器内核一次：playwright install chromium
 playwright
