@@ -1,5 +1,5 @@
 {
-  "_comment": "复制本文件为 settings.json 并填入 api_key。model/base_url 可换成任意 openai 兼容服务。api_key 留空时界面会提示未配置。",
+  "_comment": "格式参考，通常不用手改：在网页「设置 → 大模型」填入即可（保存时自动生成 settings.json）。model/base_url 可换成任意 openai 兼容服务。api_key 留空时界面会提示未配置。",
   "model": "deepseek-chat",
   "base_url": "https://api.deepseek.com",
   "api_key": ""

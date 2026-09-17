@@ -20,7 +20,6 @@ import numpy as np
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.normpath(os.path.join(_DIR, "..", "cache", "kb.sqlite"))
-EMB_CFG = os.path.normpath(os.path.join(_DIR, "..", "config", "embedding.json"))
 
 CHUNK_CHARS = 700          # 正文块目标长度
 CHUNK_OVERLAP = 80         # 相邻块重叠（保持语义连续）
@@ -29,13 +28,12 @@ EMB_BATCH = 16             # 单次 embedding 的块数
 # ---------------------------------------------------------------- 配置
 
 def _cfg():
-    return json.load(open(EMB_CFG, encoding="utf-8"))
+    """向量模型配置统一走 core.config：界面「设置」保存后即刻生效。"""
+    from .config import load_embedding
+    return load_embedding()
 
 def embedding_available():
-    try:
-        return bool(_cfg().get("api_key"))
-    except Exception:
-        return False
+    return bool(_cfg().get("api_key"))
 
 # ---------------------------------------------------------------- 向量
 

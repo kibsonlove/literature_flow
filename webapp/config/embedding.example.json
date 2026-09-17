@@ -1,5 +1,5 @@
 {
-  "_comment": "复制本文件为 embedding.json 并填入 api_key。知识库/语义检索功能需要它；默认的硅基流动 BAAI/bge-m3 免费注册即可用。不用知识库可留空。",
+  "_comment": "格式参考，通常不用手改：在网页「设置 → 知识库向量模型」填入 api_key 即可（保存时自动生成 embedding.json）。知识库/语义检索功能需要它；默认的硅基流动 BAAI/bge-m3 免费注册即可用。不用知识库可留空。",
   "provider": "siliconflow",
   "base_url": "https://api.siliconflow.cn/v1",
   "model": "BAAI/bge-m3",

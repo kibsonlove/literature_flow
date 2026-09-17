@@ -51,26 +51,36 @@ venv\Scripts\python -m uvicorn app:app --host 127.0.0.1 --port 8000
 
 > 另有一个 `serve.bat`，只重启服务、不弹浏览器，日志写到 `webapp/logs/server.log`，适合后台跑。
 
+> **双击后一闪而过 / 报 `No module named 'uvicorn'`**：说明第 1 步的 venv 还没建好。
+> `start.bat` 会优先用 `webapp\venv`，没有就退回到系统 `python`；把第 1 步做完即可。
+
 ---
 
 ## 四、配置：填什么、在哪里填
 
-先进入 `webapp/config/`，把三个 `*.example.json` 各复制一份并去掉 `.example` 后缀，然后按下表填写：
+**绝大多数配置都在界面里填**：启动后点右上角「设置」。缺必填项时页面顶部还会直接弹出引导横幅，点一下就跳过去。
 
-| 配置文件 | 填什么 | 怎么填 |
+| 填什么 | 在哪里填 | 说明 |
 |---|---|---|
-| `settings.json` | LLM 的 `api_key` / `model` / `base_url` | **网页右上角「设置」按钮就能填**，也可以直接改文件 |
-| `paths.json` | `zotero_data_dir`（Zotero 数据目录）、`zotero_exe`（程序路径） | **只能改文件**，界面没有入口 |
-| `embedding.json` | 向量化服务的 `api_key` 等 | **只能改文件**，界面没有入口 |
+| LLM 的 `api_key` / `model` / `base_url` | 「设置 → 大模型」 | **必填**，不填无法生成笔记 |
+| Zotero 数据目录、程序路径 | 「设置 → 本机路径」 | **点「自动探测」基本就能填好** |
+| 向量化服务的 `api_key` | 「设置 → 知识库向量模型」 | 只做「语义检索」时需要 |
+| OpenAlex Key | 「设置 → OpenAlex」 | 可留空，只是检索额度低一些 |
+| Zotero 写入授权 | 「设置 → Zotero 写入授权」 | 点按钮授权一次（选 Always Allow） |
+| MinerU 平台 key | ⚠ 暂无界面入口：新建 `webapp/core/mineru_key.txt`，只放一行 key | 见下方说明 |
+
+**Zotero 路径不用自己找**：点「自动探测」会读 Zotero 的 profile 与注册表——数据目录自定义过、Zotero 装在非默认盘，都能找出来。探测不到时可以点「浏览数据目录…」「选择 zotero.exe…」弹系统选择框（浏览器出于安全拿不到完整本地路径，所以由本机弹窗代选），也可以手填：数据目录就是 Zotero「编辑 → 设置 → 高级 → 文件和文件夹」里显示的「数据目录位置」（如 `D:/Zotero`）。
+
+界面里点「保存」后立刻生效，不用重启服务。
 
 补充说明：
 
-- **Zotero 数据目录怎么找**：Zotero → 编辑 → 设置 → 高级 → 文件和文件夹 → 看「数据目录位置」，把那个路径（如 `D:/Zotero`）填进 `zotero_data_dir`。
+- **不需要手工复制 `*.example.json`**。首次点「保存」时程序会自动在 `webapp/config/` 下生成对应的 `.json`；那两个 `example` 文件只是给你看格式的模板。
 - **Zotero 不需要填任何 key**。它只监听本机，程序零配置即可连上——只要 Zotero 开着就行。
 - **MinerU 平台 key**：自己新建 `webapp/core/mineru_key.txt`，里面只放一行 key（mineru.net 注册即得）。
   - 不配也能正常**精读单篇文献**——只是会降级成纯文本处理，拿不到原文表格里的量化数据；
   - 但**「语义检索」和「长文精读」必须有它**：知识库是把 MinerU 的解析结果切块建索引的，没有解析缓存就没有东西可索引。
-- 这三个 `.json` 都已写进 `.gitignore`，**永远不会被提交到仓库**。
+- 这些配置都存在 `webapp/config/*.json`，都已写进 `.gitignore`，**永远不会被提交到仓库**。界面是主入口，直接改文件同样有效。
 
 ---
 
@@ -147,12 +157,14 @@ venv\Scripts\python -m uvicorn app:app --host 127.0.0.1 --port 8000
 | 现象 | 怎么办 |
 |---|---|
 | 浏览器提示"无法访问此网站" | 等 3～5 秒刷新；仍不行看命令行窗口的报错；重启 `start.bat`（它会自动清掉占用 8000 端口的旧进程） |
+| 页面顶部有黄色引导横幅 | 说明还缺必填配置（大模型 Key 或 Zotero 数据目录）。点「打开设置」补齐，或「稍后再说」先关掉 |
 | 页面能开，但选文献时列表是空的 | Zotero 没打开。先启动 Zotero 再重试 |
+| 点了「生成」但提示找不到 PDF | 「设置 → 本机路径」里的 Zotero 数据目录填错了。点「自动探测」重试，或按 Zotero「设置 → 高级 → 文件和文件夹」里显示的位置手填 |
 | 点生成后报 key 无效 / 余额不足 | 去网页「设置」里更新 API key |
-| 「语义检索」提示未配置 embedding | 填 `webapp/config/embedding.json` |
-| 「语义检索」结果很少或为空 | 还没建索引，先点一次「更新索引」 |
+| 「语义检索」提示未配置向量模型 | 去「设置 → 知识库向量模型」填 API Key（默认用免费的硅基流动 BGE-M3） |
+| 「语义检索」结果很少或为空 | 还没建索引，先点一次「更新索引」（另需 MinerU 解析缓存，见第四节） |
 | 网页端后端报错说找不到浏览器 | 执行过 `venv\Scripts\playwright install chromium` 了吗？另外要先跑一次 `login_deepseek.py` 登录 |
 | 笔记的维度不像我这个学科 | 领域包没匹配上，回退到了通用维度。可在 `webapp/config/domains/` 里给对应学科补关键词 |
-| 精读出来的数字对不上原文 | 该文献还没被 MinerU 解析过，表格数据没喂给模型。配置 `mineru_key.txt` 可改善 |
+| 精读出来的数字对不上原文 | 该文献还没被 MinerU 解析过，表格数据没喂给模型。配置 `webapp/core/mineru_key.txt` 可改善 |
 
 更多架构细节与排错见 **`docs/项目架构与上手指南.md`**。

@@ -15,30 +15,153 @@ async function postJSON(url, body, isForm = false) {
 }
 
 // ---- 设置 ----
+let _settingsLoaded = false;
+
+async function loadZoteroWriteStatus() {
+  try {
+    const s = await (await fetch("/api/zotero/write_status")).json();
+    const el = $("zoteroWriteStatus");
+    el.textContent = s.authorized ? "已授权，可正常写入" : "未授权 —— 写入会被 Zotero 拒绝";
+    el.style.color = s.authorized ? "#1f7a37" : "#b3244b";
+  } catch (e) { $("zoteroWriteStatus").textContent = "状态读取失败"; }
+}
+
+$("zoteroAuthorize").onclick = async () => {
+  $("settingsHint").textContent = "已在 Zotero 弹出授权窗口，请选择「Always Allow」…";
+  $("zoteroAuthorize").disabled = true;
+  try {
+    await postJSON("/api/zotero/authorize", { app_name: "literature_flow" });
+    $("settingsHint").textContent = "授权成功，写入密钥已保存 ✓";
+    loadZoteroWriteStatus();
+  } catch (e) {
+    $("settingsHint").textContent = "授权失败：" + e.message;
+  } finally {
+    $("zoteroAuthorize").disabled = false;
+  }
+};
+
 $("settingsBtn").onclick = async () => {
   const p = $("settingsPanel");
   p.classList.toggle("hidden");
-  if (!p.classList.contains("hidden") && !$("apiKey").value) {
+  if (!p.classList.contains("hidden")) {
+    loadZoteroWriteStatus();
+    if (_settingsLoaded) return;
+    _settingsLoaded = true;
     try {
       const s = await (await fetch("/api/settings")).json();
       $("apiKey").value = s.api_key || "";
       $("model").value = s.model || "";
       $("baseUrl").value = s.base_url || "";
-    } catch (e) {}
+      $("openalexKey").value = s.openalex_key || "";
+      await loadPathsInto();
+      await loadEmbeddingInto();
+    } catch (e) { _settingsLoaded = false; }
   }
 };
+
+// 本机路径：未配置时用自动探测结果预填，但仍需点「保存」才写盘，避免误以为已经配好
+async function loadPathsInto() {
+  const d = await (await fetch("/api/paths")).json();
+  const dir = d.zotero_data_dir || "";
+  const exe = d.zotero_exe || "";
+  const det = d.detected || {};
+  const guessDir = (det.data_dir || {}).path || "";
+  const guessExe = (det.zotero_exe || {}).path || "";
+  $("zoteroDataDir").value = dir || guessDir;
+  $("zoteroExe").value = exe || guessExe;
+  if (!dir && guessDir) _paintPathsHint("已自动探测到路径，点「保存」生效");
+  else if (!dir) _paintPathsHint("没探测到 Zotero 数据目录，请手填或用「浏览数据目录…」");
+  else _paintPathsHint("");
+}
+
+async function loadEmbeddingInto() {
+  const e = await (await fetch("/api/embedding")).json();
+  $("embKey").value = e.api_key || "";
+  $("embBaseUrl").value = e.base_url || "";
+  $("embModel").value = e.model || "";
+}
+
 $("saveSettings").onclick = async () => {
+  const h = $("settingsHint");
+  h.textContent = "保存中…";
   try {
     await postJSON("/api/settings", {
       api_key: $("apiKey").value.trim(),
       model: $("model").value.trim(),
       base_url: $("baseUrl").value.trim(),
+      openalex_key: $("openalexKey").value.trim(),
     });
-    $("settingsHint").textContent = "已保存 ✓";
+    const p = await postJSON("/api/paths", {
+      zotero_data_dir: $("zoteroDataDir").value.trim(),
+      zotero_exe: $("zoteroExe").value.trim(),
+    });
+    await postJSON("/api/embedding", {
+      api_key: $("embKey").value.trim(),
+      base_url: $("embBaseUrl").value.trim(),
+      model: $("embModel").value.trim(),
+    });
+    if (p.zotero_data_dir && !p.data_dir_ok) {
+      h.textContent = "已保存，但该目录里没找到 storage 或 zotero.sqlite —— 请核对路径";
+    } else if (p.zotero_exe && !p.exe_ok) {
+      h.textContent = "已保存，但 zotero.exe 路径不存在 —— 请核对";
+    } else {
+      h.textContent = "已保存 ✓";
+    }
+    refreshSetupBanner();
   } catch (e) {
-    $("settingsHint").textContent = "保存失败：" + e.message;
+    h.textContent = "保存失败：" + e.message;
   }
 };
+
+// ---- 本机路径：自动探测 + 系统选择框（网页拿不到完整本地路径，故由服务端弹窗代选）----
+function _paintPathsHint(t) { $("pathsHint").textContent = t || ""; }
+
+$("detectPaths").onclick = async () => {
+  _paintPathsHint("探测中…");
+  try {
+    const det = await postJSON("/api/paths/detect", {});
+    const dir = (det.data_dir || {}).path || "";
+    const exe = (det.zotero_exe || {}).path || "";
+    if (dir) $("zoteroDataDir").value = dir;
+    if (exe) $("zoteroExe").value = exe;
+    _paintPathsHint(dir || exe ? "探测到路径，点「保存」生效" : "没探测到，请手填或用「浏览…」选择");
+  } catch (e) { _paintPathsHint("探测失败：" + e.message); }
+};
+
+async function pickPath(kind, inputId) {
+  _paintPathsHint("已弹出系统选择框，若没看到请检查任务栏…");
+  try {
+    const r = await postJSON("/api/paths/pick", { kind });
+    if (r.path) {
+      $(inputId).value = r.path;
+      _paintPathsHint("已选择，点「保存」生效");
+    } else {
+      _paintPathsHint("未选择");
+    }
+  } catch (e) { _paintPathsHint("打开选择框失败：" + e.message); }
+}
+$("pickDataDir").onclick = () => pickPath("dir", "zoteroDataDir");
+$("pickExe").onclick = () => pickPath("exe", "zoteroExe");
+
+// ---- 首次运行引导：缺必填配置时给横幅，而不是等用户撞报错 ----
+async function refreshSetupBanner() {
+  const el = $("setupBanner");
+  try {
+    const s = await (await fetch("/api/setup/status")).json();
+    if (!s.needs_setup) { el.classList.add("hidden"); return; }
+    $("setupList").innerHTML = (s.items || []).filter((i) => !i.ok).map((i) =>
+      `<li><b>${i.label}</b>：${i.hint} <span class="muted">（${i.where}）</span></li>`).join("");
+    el.classList.remove("hidden");
+  } catch (e) { el.classList.add("hidden"); }
+}
+
+$("setupOpenBtn").onclick = () => {
+  const p = $("settingsPanel");
+  if (p.classList.contains("hidden")) $("settingsBtn").click();
+  p.scrollIntoView({ behavior: "smooth", block: "start" });
+};
+$("setupLaterBtn").onclick = () => $("setupBanner").classList.add("hidden");
+refreshSetupBanner();
 
 // ---- 后端切换：显示/隐藏网页端地址 ----
 document.querySelectorAll("input[name=backend]").forEach((r) => {
@@ -857,3 +980,424 @@ $("longdocStart").onclick = async () => {
   }
 };
 $("longdocStatusBtn").onclick = refreshLongdoc;
+
+// ================= 文献检索（OpenAlex + arXiv，含引文追踪与批量入库） =================
+let litResults = [];   // 当前结果集（检索 + 引文追踪合并后）
+let litSlug = "";      // 当前载入的主题 slug，保存时用于覆盖同名主题
+let litAutoLoaded = false;   // 首次打开面板自动载入最近主题，只做一次
+let litRestored = false;     // 首次打开面板从本地恢复上次结果，只做一次
+let litRestoredPicks = null; // 待恢复的勾选（存 data-i 字符串），在 litDraw() 之后再套用
+
+// 结果存浏览器本地：刷新/关标签/重启后仍能接着看与勾选。
+// 注意：点「检索」永远是实时重查并覆盖这份存档，存档只用于"不丢上一次的进度"。
+const LIT_STORE = "litflow_search_v1";
+
+function litSave() {
+  try {
+    localStorage.setItem(LIT_STORE, JSON.stringify({
+      ts: new Date().toISOString(),
+      results: litResults,
+      picked: Array.prototype.slice.call(document.querySelectorAll(".lit-pick:checked"))
+        .map((c) => c.dataset.i),
+    }));
+  } catch (e) { /* 隐私模式 / 配额满：静默降级，不影响检索本身 */ }
+}
+
+function litRestore() {
+  try {
+    const raw = localStorage.getItem(LIT_STORE);
+    if (!raw) return null;
+    const d = JSON.parse(raw);
+    if (!d || !Array.isArray(d.results) || !d.results.length) return null;
+    litResults = d.results;
+    litRestoredPicks = d.picked || [];   // 勾选状态延后恢复：必须在最后一次 litDraw() 之后
+    return d.ts || "";
+  } catch (e) { return null; }
+}
+
+$("litBtn").onclick = async () => {
+  $("litPanel").classList.remove("hidden");
+  let restoredTs = null;
+  if (!litRestored) { litRestored = true; restoredTs = litRestore(); }
+
+  await loadLitTopics();
+  if (!litAutoLoaded) {
+    litAutoLoaded = true;
+    const list = JSON.parse($("litTopicSel").dataset.list || "[]");
+    if (list.length && litApplyTopic(list[0])) {
+      $("litTopicSel").value = "0";
+    }
+  }
+  litDraw();   // 画表（空结果时显示说明文字）
+
+  // 恢复勾选只能放在 litDraw() 之后 —— 重画会清空所有勾选框
+  if (restoredTs) {
+    (litRestoredPicks || []).forEach((i) => {
+      const c = document.querySelector(`.lit-pick[data-i="${i}"]`);
+      if (c) c.checked = true;
+    });
+    litRestoredPicks = null;
+    const when = restoredTs.replace("T", " ").slice(5, 16);
+    $("litStatus").textContent = `已恢复上次检索的 ${litResults.length} 条结果（${when}，含勾选）`
+      + `，可直接接着入库；点「检索」则实时重跑并覆盖`;
+  } else if (litResults.length) {
+    $("litStatus").textContent = `当前 ${litResults.length} 条结果`;
+  } else {
+    const t = litPickedTopic();
+    if (t) $("litStatus").textContent = `已载入主题「${t.name}」，点「检索」开始`;
+  }
+};
+$("litClose").onclick = () => $("litPanel").classList.add("hidden");
+
+function litForm() {
+  const sources = [];
+  if ($("litSrcOA").checked) sources.push("openalex");
+  if ($("litSrcAX").checked) sources.push("arxiv");
+  return {
+    name: $("litName").value.trim(),
+    slug: litSlug,
+    queries: $("litQueries").value.split("\n").map((s) => s.trim()).filter(Boolean),
+    since: $("litSince").value.trim(),
+    sources: sources,
+    per_page: parseInt($("litPer").value, 10) || 100,
+    sort: $("litSort").value,
+    collection: $("litCollection").value.trim(),
+  };
+}
+
+async function loadLitTopics() {
+  try {
+    const list = await (await fetch("/api/lit/topics")).json();
+    const arr = list || [];
+    $("litTopicSel").innerHTML = '<option value="">（未选择主题）</option>' +
+      arr.map((t, i) => `<option value="${i}">${escapeHtml(t.name)}</option>`).join("");
+    $("litTopicSel").dataset.list = JSON.stringify(arr);
+  } catch (e) { /* 主题列表读不到不影响检索功能 */ }
+}
+
+function litPickedTopic() {
+  const list = JSON.parse($("litTopicSel").dataset.list || "[]");
+  return list[parseInt($("litTopicSel").value, 10)];
+}
+
+// 把一个主题配置填进表单（载入主题 / 打开面板自动载入 共用）
+function litApplyTopic(t) {
+  if (!t) return false;
+  litSlug = t.slug || "";
+  $("litName").value = t.name || "";
+  $("litSince").value = t.since || "";
+  $("litPer").value = t.per_page || 100;
+  $("litCollection").value = t.collection || "";
+  $("litQueries").value = (t.queries || []).join("\n");
+  const src = t.sources || ["openalex"];
+  $("litSrcOA").checked = src.indexOf("openalex") >= 0;
+  $("litSrcAX").checked = src.indexOf("arxiv") >= 0;
+  if (t.sort && $("litSort").querySelector(`option[value="${t.sort}"]`)) $("litSort").value = t.sort;
+  return true;
+}
+
+$("litTopicLoad").onclick = () => {
+  const t = litPickedTopic();
+  if (!t) { $("litStatus").textContent = "请先在下拉框里选一个主题"; return; }
+  litApplyTopic(t);
+  $("litStatus").textContent = `已载入主题「${t.name}」（${(t.queries || []).length} 条检索式），点「检索」开始`;
+};
+
+$("litTopicSave").onclick = async () => {
+  const form = litForm();
+  if (!form.name) { $("litStatus").textContent = "请先填写主题名"; return; }
+  if (!form.queries.length) { $("litStatus").textContent = "请先填写至少一条检索式"; return; }
+  try {
+    const t = await postJSON("/api/lit/topics", form);
+    litSlug = t.slug || "";
+    $("litStatus").textContent = `主题「${t.name}」已保存到本机`;
+    loadLitTopics();
+  } catch (e) { $("litStatus").textContent = "保存失败：" + e.message; }
+};
+
+$("litTopicDel").onclick = async () => {
+  const t = litPickedTopic();
+  if (!t) { $("litStatus").textContent = "请先在下拉框里选一个主题"; return; }
+  if (!confirm(`删除检索主题「${t.name}」？\n只删检索配置，不影响 Zotero 里已入库的文献。`)) return;
+  try {
+    await postJSON("/api/lit/topics/delete", { slug: t.slug });
+    if (litSlug === t.slug) litSlug = "";
+    $("litStatus").textContent = "主题已删除";
+    loadLitTopics();
+  } catch (e) { $("litStatus").textContent = "删除失败：" + e.message; }
+};
+
+// 数据源异常告警：有源挂了就必须说出来，不能让用户以为拿到的是全量结果
+function litShowWarn(msgs) {
+  const w = $("litWarn");
+  if (!w) return;
+  w.classList.remove("lit-info");
+  if (!msgs || !msgs.length) { w.classList.add("hidden"); w.innerHTML = ""; return; }
+  w.innerHTML = "<b>数据源异常，本次结果不完整：</b>" + msgs.map(escapeHtml).join("；")
+    + "<br>额度恢复后重新点「检索」即可；也可以临时只勾 arXiv 先跑（OpenAlex 侧暂时拿不到）。";
+  w.classList.remove("hidden");
+}
+
+// 中性提示（非故障）：例如"未配 Key，可以去免费注册"
+function litShowInfo(html) {
+  const w = $("litWarn");
+  if (!w) return;
+  if (!html) { w.classList.add("hidden"); w.innerHTML = ""; return; }
+  w.innerHTML = html;
+  w.classList.add("lit-info");
+  w.classList.remove("hidden");
+}
+
+// 通用错误展示（写入失败之类），红色报警样式
+function litShowError(html) {
+  const w = $("litWarn");
+  if (!w) return;
+  w.classList.remove("lit-info");
+  w.innerHTML = html;
+  w.classList.remove("hidden");
+}
+
+$("litRun").onclick = async () => {
+  const form = litForm();
+  if (!form.queries.length) { $("litStatus").textContent = "请先填写至少一条检索式"; return; }
+  if (!form.sources.length) { $("litStatus").textContent = "请至少选择一个数据源"; return; }
+  $("litRun").disabled = true;
+  litShowWarn(null);
+  $("litStatus").textContent = "检索中…（多检索式 × 多数据源，约需 30–60 秒；arXiv 官方要求 3 秒间隔，属正常）";
+  $("litLog").textContent = "检索中…";
+  try {
+    const r = await postJSON("/api/lit/search", form);
+    litResults = r.results || [];
+    litDraw();
+    litSave();
+    litShowWarn(r.degraded);
+    $("litLog").textContent = (r.log || []).concat(r.errors || []).join("\n") || "（无日志）";
+    $("litStatus").textContent = (r.degraded || []).length
+      ? `检索完成，命中 ${litResults.length} 条 —— 有数据源未响应，结果不完整`
+      : `检索完成，命中 ${litResults.length} 条`;
+  } catch (e) {
+    $("litStatus").textContent = "检索失败：" + e.message;
+  } finally {
+    $("litRun").disabled = false;
+  }
+};
+
+// 可见行：勾了「隐藏已在库」就过滤掉已入库的。
+// 注意 data-i 仍写原始下标，这样勾选/勾全选与实际数组始终对得上。
+function litVisibleIdx() {
+  const hide = $("litHideLib").checked;
+  const out = [];
+  litResults.forEach((x, i) => { if (!(hide && x.in_library)) out.push(i); });
+  return out;
+}
+
+// 重画表格。keepSel=true 时保留当前勾选（切换筛选时用）；
+// 新检索/引文追踪后不要保留——结果集换了、下标会错位。
+function litDraw(keepSel) {
+  const keep = keepSel
+    ? Array.prototype.slice.call(document.querySelectorAll(".lit-pick:checked")).map((c) => c.dataset.i)
+    : null;
+
+  const oa = litResults.filter((x) => x.oa_url).length;
+  const lib = litResults.filter((x) => x.in_library).length;
+  const byOa = litResults.filter((x) => x.source === "openalex").length;
+  const idx = litVisibleIdx();
+  const split = litResults.length ? `（OpenAlex ${byOa} · arXiv ${litResults.length - byOa}）` : "";
+  $("litCount").textContent = litResults.length
+    ? `共 ${litResults.length} 条${split} · 可下载全文 ${oa} 条 · 已在库 ${lib} 条`
+      + (idx.length < litResults.length ? `（已隐藏 ${litResults.length - idx.length} 条已在库）` : "")
+    : "尚未检索";
+
+  if (!litResults.length) {
+    $("litTable").innerHTML = `<tbody><tr><td colspan="5" class="lit-empty">
+      结果还没出来 —— 上方填好检索式后点「检索」，命中的文献会列在这里。<br>
+      每行<b>最左侧的方框</b>就是勾选框：勾好再点「入库选中」，就会写进 Zotero 的对应分类。
+    </td></tr></tbody>`;
+  } else if (!idx.length) {
+    $("litTable").innerHTML = `<tbody><tr><td colspan="5" class="lit-empty">
+      这一批 ${litResults.length} 条<b>全部已在库中</b>，被「隐藏已在库」过滤掉了。<br>
+      想核对就把左上角那个勾去掉；想找新文献，建议改检索式、调时间窗，或用引文追踪往外扩。
+    </td></tr></tbody>`;
+  } else {
+    $("litTable").innerHTML =
+      `<thead><tr>
+        <th class="lit-pickcell"></th>
+        <th>文献</th>
+        <th style="width:122px">来源 / 状态</th>
+        <th style="width:56px">被引</th>
+        <th style="width:172px">操作</th>
+      </tr></thead><tbody>${idx.map((i) => litRowHtml(litResults[i], i)).join("")}</tbody>`;
+  }
+
+  if (keep) {
+    keep.forEach((i) => {
+      const c = document.querySelector(`.lit-pick[data-i="${i}"]`);
+      if (c) c.checked = true;
+    });
+  } else {
+    $("litSelAll").checked = false;
+  }
+}
+
+function litRowHtml(x, i) {
+  const au = (x.authors || []).slice(0, 3).join(", ") + ((x.authors || []).length > 3 ? " 等" : "");
+  const chips = [`<span class="lit-chip src">${x.source === "arxiv" ? "arXiv" : "OpenAlex"}</span>`];
+  if ((x.also || []).length) chips.push(`<span class="lit-chip src">+${(x.also || []).join("/")}</span>`);
+  chips.push(x.oa_url
+    ? '<span class="lit-chip oa">可下载全文</span>'
+    : '<span class="lit-chip nooa">无全文</span>');
+  if (x.in_library) chips.push('<span class="lit-chip lib">已在库</span>');
+  const doiLink = x.doi
+    ? ` · <a href="https://doi.org/${encodeURIComponent(x.doi)}" target="_blank" rel="noopener">DOI</a>`
+    : "";
+  const abs = x.abstract
+    ? `<div class="lit-abs hidden" id="litAbs${i}">${escapeHtml(x.abstract)}</div>` : "";
+  return `<tr>
+    <td class="lit-pickcell"><input type="checkbox" class="lit-pick" data-i="${i}"></td>
+    <td>
+      <div class="lit-title"><a href="${escapeHtml(x.url || "#")}" target="_blank" rel="noopener">${escapeHtml(x.title)}</a></div>
+      <div class="lit-meta">${escapeHtml(au)} · ${x.year || "—"}${x.venue ? " · " + escapeHtml(x.venue) : ""}${doiLink}</div>
+      ${abs}
+    </td>
+    <td>${chips.join("")}</td>
+    <td>${x.cited_by || 0}</td>
+    <td class="lit-acts">
+      ${x.abstract ? `<button class="ghost lit-mini lit-absbtn" data-i="${i}">摘要</button>` : ""}
+      <button class="ghost lit-mini lit-cite" data-i="${i}">追引用</button>
+      <button class="ghost lit-mini lit-ref" data-i="${i}">参考文献</button>
+    </td>
+  </tr>`;
+}
+
+$("litTable").addEventListener("click", (ev) => {
+  const b = ev.target.closest("button");
+  if (!b) return;
+  const i = parseInt(b.dataset.i, 10);
+  if (b.classList.contains("lit-absbtn")) {
+    const el = $("litAbs" + i);
+    if (!el) return;
+    el.classList.toggle("hidden");
+    b.textContent = el.classList.contains("hidden") ? "摘要" : "收起";
+  } else if (b.classList.contains("lit-cite")) {
+    litExpand(i, "citing");
+  } else if (b.classList.contains("lit-ref")) {
+    litExpand(i, "referenced");
+  }
+});
+
+$("litSelAll").onchange = () => {
+  document.querySelectorAll(".lit-pick").forEach((c) => { c.checked = $("litSelAll").checked; });
+  litSave();
+};
+
+$("litHideLib").onchange = () => { litDraw(true); litSave(); };
+
+$("litClearCache").onclick = () => {
+  if (litResults.length
+      && !confirm(`清空当前这 ${litResults.length} 条结果？\n只清浏览器里的这份快照，不影响 Zotero 里已入库的文献。`)) return;
+  litResults = [];
+  try { localStorage.removeItem(LIT_STORE); } catch (e) {}
+  litShowWarn(null);
+  litDraw();
+  $("litStatus").textContent = "已清空结果（点「检索」可重新跑）";
+};
+
+$("litQuota").onclick = async () => {
+  $("litStatus").textContent = "正在查询 OpenAlex 额度…";
+  try {
+    const q = await (await fetch("/api/lit/quota")).json();
+    if (!q.has_key) {
+      $("litStatus").textContent = "未配置 OpenAlex API Key（当前用匿名额度）";
+      litShowInfo("<b>还没配 OpenAlex API Key。</b>当前匿名额度：每天 $0.1（约 100 次请求 ≈ 20 轮检索），"
+        + "每天北京时间早 8 点重置。<br>免费注册约 30 秒，额度提升到 $1/天（10 倍）且能查看用量："
+        + "<a href=\"https://openalex.org/settings/api\" target=\"_blank\" rel=\"noopener\">openalex.org/settings/api</a>"
+        + " —— 登录后复制 key，粘到「设置」里的 <b>OpenAlex API Key</b> 即可。");
+      return;
+    }
+    if (q.error) { $("litStatus").textContent = "额度查询失败：" + q.error; return; }
+    const hrs = q.resets_in_seconds ? (q.resets_in_seconds / 3600).toFixed(1) : "?";
+    const cost = Math.max(1, Math.round((q.credits_remaining || 0) / 10));
+    $("litStatus").textContent =
+      `OpenAlex 额度：剩余 ${q.credits_remaining}/${q.credits_limit} credits`
+      + `（约 ${cost} 次检索请求）· 已用 ${q.credits_used} · ${hrs} 小时后重置（UTC 午夜 = 北京早 8 点）`;
+  } catch (e) {
+    $("litStatus").textContent = "额度查询失败：" + e.message;
+  }
+};
+
+$("litTable").addEventListener("change", (ev) => {
+  if (ev.target.classList && ev.target.classList.contains("lit-pick")) litSave();
+});
+
+// 引文追踪：citing = 找引用它的后续工作；referenced = 找它的奠基文献
+async function litExpand(i, direction) {
+  const rec = litResults[i];
+  if (!rec) return;
+  $("litStatus").textContent = direction === "citing" ? "正在追踪引用它的后续工作…" : "正在追踪它的参考文献…";
+  try {
+    const r = await postJSON("/api/lit/expand", {
+      record: rec, direction: direction, limit: 40, since: $("litSince").value.trim(),
+    });
+    const known = {};
+    litResults.forEach((x) => { known[x.uid] = true; });
+    const tag = `${direction === "citing" ? "引用了" : "参考文献于"}「${(rec.title || "").slice(0, 34)}」`;
+    const added = (r.results || []).filter((x) => !known[x.uid]);
+    added.forEach((x) => { x.via = tag; });
+    litResults = added.concat(litResults);
+    litDraw();
+    litSave();
+    $("litStatus").textContent = added.length
+      ? `「${(rec.title || "").slice(0, 28)}」引文追踪新增 ${added.length} 条，当前共 ${litResults.length} 条`
+      : "没有新增（追踪到的文献都已在结果里）";
+  } catch (e) {
+    $("litStatus").textContent = "引文追踪失败：" + e.message;
+  }
+}
+
+$("litImport").onclick = async () => {
+  const picks = Array.prototype.slice.call(document.querySelectorAll(".lit-pick:checked"))
+    .map((c) => litResults[parseInt(c.dataset.i, 10)]).filter(Boolean);
+  if (!picks.length) { $("litStatus").textContent = "请先在结果表里勾选要入库的文献"; return; }
+  const col = $("litCollection").value.trim();
+  const doPdf = $("litFetchPdf").checked;
+  const dup = picks.filter((x) => x.in_library).length;
+  let msg = `将把 ${picks.length} 条写入 Zotero`;
+  msg += col ? `，归入分类「${col}」（不存在则新建）` : "（不指定分类）";
+  msg += doPdf ? "，并抓取可下载的开放获取 PDF 挂为附件" : "";
+  if (dup) msg += `。\n其中 ${dup} 条已在库中，会自动跳过。`;
+  msg += "\n\n确认执行？";
+  if (!confirm(msg)) return;
+  $("litImport").disabled = true;
+  $("litStatus").textContent = "入库中…（逐条建条目并抓取全文，可能需要一两分钟）";
+  try {
+    const r = await postJSON("/api/lit/import", { records: picks, collection: col, fetch_pdf: doPdf });
+    $("litLog").textContent = (r.log || []).join("\n") || "（无日志）";
+    $("litStatus").textContent = `入库完成：新建 ${r.created} 条 · 跳过 ${r.skipped} 条 · 抓到全文 ${r.pdf_ok} 篇`
+      + (r.collection ? ` · 分类「${r.collection.name}」` : "");
+    picks.forEach((x) => { x.in_library = true; });
+    litDraw(true);   // 入库后保留其余勾选；刚入库的会被「隐藏已在库」收走
+    litSave();
+  } catch (e) {
+    $("litStatus").textContent = "入库失败";
+    litShowError("<b>入库失败：</b>" + escapeHtml(e.message).replace(/\n/g, "<br>"));
+  } finally {
+    $("litImport").disabled = false;
+  }
+};
+
+$("litExport").onclick = () => {
+  if (!litResults.length) { $("litStatus").textContent = "还没有检索结果可导出"; return; }
+  const cell = (v) => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`;
+  const head = ["年份", "标题", "作者", "载体", "来源", "被引", "DOI", "OA链接", "已在库", "命中检索式"];
+  const rows = litResults.map((x) => [
+    x.year || "", x.title || "", (x.authors || []).join("; "), x.venue || "",
+    x.source === "arxiv" ? "arXiv" : "OpenAlex", x.cited_by || 0, x.doi || "",
+    x.oa_url || "", x.in_library ? "是" : "否", x.via || "",
+  ].map(cell).join(","));
+  const csv = "\ufeff" + [head.map(cell).join(",")].concat(rows).join("\r\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+  a.download = `文献检索_${$("litName").value.trim() || "结果"}_${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+};

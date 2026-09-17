@@ -5,7 +5,7 @@ import glob
 
 import pymupdf as fitz  # PyMuPDF（pymupdf 是推荐的入口，避免 fitz 弃用警告）
 
-from .config import ZOTERO_DATA_DIR
+from .config import zotero_data_dir
 
 
 def extract_pdf(path):
@@ -50,5 +50,5 @@ def pdf_path_from_zotero_key(key):
                 break
         if not ak:
             return None
-    cand = glob.glob(os.path.join(ZOTERO_DATA_DIR, "storage", ak, "*.pdf"))
+    cand = glob.glob(os.path.join(zotero_data_dir(), "storage", ak, "*.pdf"))
     return cand[0] if cand else None

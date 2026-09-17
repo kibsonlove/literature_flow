@@ -94,3 +94,58 @@ code { background: #eef1f5; padding: .05em .35em; border-radius: 4px; font-size:
 #batchPanel .batch-log { height: 220px; flex: 0 0 auto; }
 #batchResultWrap { flex: 1 1 0; min-height: 100px; max-height: none; }
 #batchResult thead th { position: sticky; top: 0; background: #f5efe2; z-index: 1; }
+
+/* 文献检索 */
+#litPanel .modal { height: 89vh; overflow: hidden; }
+#litPanel .row { flex: 0 0 auto; }
+#litTopicSel, #litSort { padding: .45em .5em; border: 1px solid #ccc; border-radius: 6px; font-size: .92em; }
+.lit-opts { font-size: .85em; color: #555; }
+.lit-opts .radio { display: inline-flex; align-items: center; gap: .3em; }
+.lit-opts input[type=checkbox] { width: auto; flex: none; }
+.lit-queries { width: 100%; min-height: 86px; font-family: ui-monospace, Consolas, monospace; font-size: .82em; line-height: 1.55; padding: .55em .7em; border: 1px solid #ccc; border-radius: 6px; resize: vertical; flex: 0 0 auto; }
+.lit-toolbar { display: flex; align-items: center; gap: 1.2em; flex-wrap: wrap; font-size: .85em; color: #555; padding: .4em 0; border-top: 1px solid #eee; flex: 0 0 auto; }
+.lit-toolbar .radio { display: inline-flex; align-items: center; gap: .3em; }
+.lit-toolbar input[type=checkbox] { width: auto; flex: none; }
+.lit-tip { color: #666; font-size: .95em; }
+.lit-wrap { flex: 1 1 0; min-height: 120px; overflow: auto; border: 1px solid #eee; border-radius: 8px; margin: .2em 0 .5em; }
+.lit-table { border-collapse: collapse; width: 100%; font-size: .82em; }
+.lit-table thead th { position: sticky; top: 0; background: #f5efe2; z-index: 1; text-align: left; padding: 6px 8px; border-bottom: 1px solid #e2dccc; font-weight: 600; white-space: nowrap; }
+.lit-table td { border-bottom: 1px solid #f2f2f2; padding: 6px 8px; vertical-align: top; }
+.lit-table tr:hover td { background: #f8fbff; }
+.lit-empty { padding: 2.2em 1.5em; text-align: center; color: #666; line-height: 2; font-size: 1.05em; }
+.lit-table tbody tr:hover td.lit-empty { background: transparent; }
+/* 中性提示态：额度说明之类，不是故障，别用红色报警 */
+.zp-warn.lit-info { color: #1b4dc0; background: #eef3ff; border-color: #d8e3ff; }
+.zp-warn.lit-info b { color: #14408f; }
+.zp-warn.lit-info a { color: #1b4dc0; }
+.lit-table td.lit-pickcell { width: 26px; }
+.lit-table td.lit-acts { width: 168px; white-space: nowrap; }
+.lit-title { font-weight: 600; line-height: 1.45; }
+.lit-title a { color: #1b4dc0; text-decoration: none; }
+.lit-title a:hover { text-decoration: underline; }
+.lit-meta { color: #666; font-size: .95em; margin-top: 2px; }
+.lit-meta a { color: #2f6df0; }
+.lit-abs { color: #444; font-size: .96em; margin-top: 5px; line-height: 1.55; background: #fafbfd; border-left: 2px solid #d8e3ff; padding: .4em .6em; }
+.lit-abs.hidden { display: none; }
+.lit-chip { display: inline-block; border-radius: 1em; padding: .05em .5em; margin: 1px 3px 1px 0; font-size: .92em; white-space: nowrap; }
+.lit-chip.src { background: #eef1f5; color: #4a5568; }
+.lit-chip.oa { background: #e7f6ec; color: #1f7a37; }
+.lit-chip.nooa { background: #f1f1f1; color: #5f5e5a; }
+.lit-chip.lib { background: #fff3da; color: #9a6b00; }
+.lit-mini { padding: .2em .55em; font-size: .88em; border-radius: 4px; margin-right: 3px; }
+/* 局部修正：全局 button:hover（特异性 0,1,1）会盖掉 .ghost 的白底，
+   导致描边按钮悬停后变实心蓝 + 蓝字（对比度约 1.3:1，不可读）。这里只修本面板范围。 */
+#litPanel .ghost:hover { background: #eef3ff; color: #1b4dc0; border-color: #1b4dc0; }
+/* 同上：全局 .muted 的 #888 在浅底上只有 3.54:1，低于 AA 的 4.5:1，本面板内压深一档 */
+#litPanel .muted { color: #666; }
+.lit-log { flex: 0 0 auto; height: 88px; overflow: auto; background: #f7f4ee; padding: .5em .7em; font-size: .78em; white-space: pre-wrap; margin: 0; border-radius: 6px; }
+
+/* 首次运行引导横幅：缺配置时提示，不阻塞使用 */
+.setup-banner { max-width: 920px; margin: 1.2em auto 0; padding: .9em 1.2em; background: #fff8e6; border: 1px solid #f0d89a; border-radius: 10px; }
+.setup-banner .sb-title { font-weight: 600; margin-bottom: .35em; color: #5a4a1a; }
+.setup-banner ul { margin: 0 0 .5em; padding-left: 1.2em; font-size: .88em; color: #5a4a1a; line-height: 1.7; }
+.setup-banner .muted { color: #7a6428; }
+/* 同 litPanel：局部盖掉全局 button:hover 的低对比度，只作用于设置面板与引导横幅内的描边按钮 */
+#settingsPanel .ghost:hover, #setupBanner .ghost:hover { background: #eef3ff; color: #1b4dc0; border-color: #1b4dc0; }
+#settingsPanel .muted, #setupBanner .muted { color: #666; }
+#pathsHint { flex: 1 1 100%; }

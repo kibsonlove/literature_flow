@@ -1,19 +1,21 @@
 # -*- coding: utf-8 -*-
-"""本地设置（API key / 模型）存储。仅存本机，明文，勿提交 git。"""
+"""本地配置读写（密钥 / 模型 / 本机路径）。仅存本机，明文，勿提交 git。
+
+三个文件都在 config/ 下，界面「设置」与手工编辑等价：
+  settings.json   —— 大模型 API Key / 模型 / Base URL、OpenAlex Key
+  paths.json      —— Zotero 数据目录、Zotero 程序路径、写入授权密钥
+  embedding.json  —— 知识库 / 语义检索用的向量模型
+
+本机路径一律走下面的函数（而非模块级常量）读取：用户在界面里改完即可生效，
+不必重启服务，也不会出现「改了配置没反应」的假象。
+"""
 import json
 import os
 
 CONFIG_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config")
 SETTINGS_PATH = os.path.join(CONFIG_DIR, "settings.json")
-
-# 本机路径（Zotero 数据目录 / 程序）存于 config/paths.json（本地文件，不入库 git）
-_paths = {}
-try:
-    _paths = json.load(open(os.path.join(CONFIG_DIR, "paths.json"), encoding="utf-8"))
-except Exception:
-    _paths = {}
-ZOTERO_DATA_DIR = _paths.get("zotero_data_dir", "")
-ZOTERO_EXE = _paths.get("zotero_exe", "")
+PATHS_PATH = os.path.join(CONFIG_DIR, "paths.json")
+EMBEDDING_PATH = os.path.join(CONFIG_DIR, "embedding.json")
 
 # 等待 Zotero 本地 API 就绪的最长秒数
 ZOTERO_WAIT_SECONDS = 60
@@ -21,6 +23,12 @@ ZOTERO_WAIT_SECONDS = 60
 DEFAULTS = {
     "model": "deepseek-chat",
     "base_url": "https://api.deepseek.com",
+}
+
+EMBEDDING_DEFAULTS = {
+    "provider": "siliconflow",
+    "base_url": "https://api.siliconflow.cn/v1",
+    "model": "BAAI/bge-m3",
 }
 
 
@@ -33,35 +41,142 @@ def _placeholder(v):
     return any("\u4e00" <= ch <= "\u9fff" for ch in s)
 
 
+def _mask(key):
+    return ("*" * max(0, len(key) - 4)) + key[-4:] if len(key) > 4 else "****"
+
+
+def _read_json(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            d = json.load(f)
+    except Exception:
+        return {}
+    return d if isinstance(d, dict) else {}
+
+
+def _write_json(path, d):
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(d, f, ensure_ascii=False, indent=2)
+
+
+# ---------------------------------------------------------------- 通用设置
+
 def load_settings():
-    if not os.path.exists(SETTINGS_PATH):
-        d = dict(DEFAULTS)
-    else:
-        try:
-            with open(SETTINGS_PATH, encoding="utf-8") as f:
-                d = json.load(f)
-        except Exception:
-            d = dict(DEFAULTS)
+    d = dict(DEFAULTS)
+    d.update(_read_json(SETTINGS_PATH))
     d.setdefault("model", DEFAULTS["model"])
     d.setdefault("base_url", DEFAULTS["base_url"])
     key = (d.get("api_key") or "").strip()
     d["has_key"] = not _placeholder(key)
     if d["has_key"]:
-        d["api_key_masked"] = ("*" * max(0, len(key) - 4)) + key[-4:] if len(key) > 4 else "****"
+        d["api_key_masked"] = _mask(key)
+    oa = (d.get("openalex_key") or "").strip()
+    d["has_openalex_key"] = not _placeholder(oa)
+    if d["has_openalex_key"]:
+        d["openalex_key_masked"] = _mask(oa)
     return d
 
 
-def save_settings(api_key=None, model=None, base_url=None):
-    d = load_settings()
-    d.pop("has_key", None)
-    d.pop("api_key_masked", None)
+def openalex_key():
+    """OpenAlex API Key：优先环境变量 OPENALEX_API_KEY，其次 settings.json。
+
+    免费注册即得（openalex.org/settings/api，约 30 秒），每日额度从 $0.1 提到 $1（10 倍）。
+    没有 key 也能正常检索，只是额度低——所以调用方必须允许它为空。
+    """
+    k = (os.environ.get("OPENALEX_API_KEY") or "").strip()
+    if k:
+        return k
+    k = (_read_json(SETTINGS_PATH).get("openalex_key") or "").strip()
+    return "" if _placeholder(k) else k
+
+
+def save_settings(api_key=None, model=None, base_url=None, openalex_key=None):
+    d = _read_json(SETTINGS_PATH)
+    for k in ("has_key", "api_key_masked", "has_openalex_key", "openalex_key_masked"):
+        d.pop(k, None)
     if api_key is not None:
-        d["api_key"] = api_key
+        d["api_key"] = api_key.strip()
     if model is not None:
-        d["model"] = model
+        d["model"] = model.strip() or DEFAULTS["model"]
     if base_url is not None:
-        d["base_url"] = base_url
-    os.makedirs(CONFIG_DIR, exist_ok=True)
-    with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
-        json.dump(d, f, ensure_ascii=False, indent=2)
+        d["base_url"] = base_url.strip() or DEFAULTS["base_url"]
+    if openalex_key is not None:
+        d["openalex_key"] = openalex_key.strip()
+    _write_json(SETTINGS_PATH, d)
     return load_settings()
+
+
+# ---------------------------------------------------------------- 本机路径
+
+_auto_cache = {}
+
+
+def load_paths():
+    """读取 config/paths.json 的原始内容（不含兜底与探测）。"""
+    return _read_json(PATHS_PATH)
+
+
+def save_paths(**fields):
+    """只覆盖传入的字段，其余保持原样（含模板里的 _comment）。"""
+    d = load_paths()
+    for k, v in fields.items():
+        if v is None:
+            continue
+        d[k] = v.strip() if isinstance(v, str) else v
+    _write_json(PATHS_PATH, d)
+    _auto_cache.clear()
+    return d
+
+
+def _detect(key):
+    if key not in _auto_cache:
+        try:
+            from . import zotero_detect
+            _auto_cache[key] = zotero_detect.detect()[key].get("path") or ""
+        except Exception:
+            _auto_cache[key] = ""
+    return _auto_cache[key]
+
+
+def zotero_data_dir():
+    """Zotero 数据目录（含 storage/ 与 zotero.sqlite 的文件夹）。
+
+    未配置时回退到自动探测结果（只读，不写文件），尽量做到开箱可用。
+    """
+    v = (load_paths().get("zotero_data_dir") or "").strip()
+    return v or _detect("data_dir")
+
+
+def zotero_exe():
+    """Zotero 程序路径；未配置时回退自动探测。"""
+    v = (load_paths().get("zotero_exe") or "").strip()
+    return v or _detect("zotero_exe")
+
+
+# ---------------------------------------------------------------- 向量模型（知识库）
+
+def load_embedding():
+    d = dict(EMBEDDING_DEFAULTS)
+    d.update(_read_json(EMBEDDING_PATH))
+    key = (d.get("api_key") or "").strip()
+    d["has_key"] = not _placeholder(key)
+    if d["has_key"]:
+        d["api_key_masked"] = _mask(key)
+    return d
+
+
+def save_embedding(api_key=None, base_url=None, model=None, provider=None):
+    d = _read_json(EMBEDDING_PATH)
+    for k in ("has_key", "api_key_masked"):
+        d.pop(k, None)
+    if api_key is not None:
+        d["api_key"] = api_key.strip()
+    if base_url is not None:
+        d["base_url"] = base_url.strip() or EMBEDDING_DEFAULTS["base_url"]
+    if model is not None:
+        d["model"] = model.strip() or EMBEDDING_DEFAULTS["model"]
+    if provider is not None:
+        d["provider"] = provider.strip() or EMBEDDING_DEFAULTS["provider"]
+    _write_json(EMBEDDING_PATH, d)
+    return load_embedding()

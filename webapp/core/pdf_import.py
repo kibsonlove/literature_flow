@@ -118,8 +118,8 @@ def import_pdf(z, path, log=None, auto_mineru=True):
         z.delete_item(z.item(parent))
         return {"ok": False, "file": name, "error": "附件条目创建失败"}
     att = list(r2["successful"].values())[0]["key"]
-    from core.config import ZOTERO_DATA_DIR
-    dst = os.path.join(ZOTERO_DATA_DIR, "storage", att)
+    from core.config import zotero_data_dir
+    dst = os.path.join(zotero_data_dir(), "storage", att)
     os.makedirs(dst, exist_ok=True)
     shutil.copy(path, os.path.join(dst, name))
     if not os.path.exists(os.path.join(dst, name)):

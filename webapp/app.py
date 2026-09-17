@@ -17,7 +17,9 @@ from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from core.config import load_settings, save_settings
+from core.config import (
+    load_embedding, load_paths, load_settings, save_embedding, save_paths, save_settings,
+)
 from core.extract import pdf_to_text, pdf_path_from_zotero_key
 from core.read import read_paper, read_paper_webchat
 from core.batch import (
@@ -89,7 +91,8 @@ def kb_index(payload: dict):
     """为已有 MinerU 缓存的文献建/更新索引。payload: {force?}"""
     from core import kb
     if not kb.embedding_available():
-        raise HTTPException(400, "未配置 embedding（config/embedding.json）")
+        raise HTTPException(400, "尚未配置知识库向量模型。请到顶栏「设置 → 知识库」填入 API Key"
+                                "（默认用硅基流动 BGE-M3，免费注册约 1 分钟）")
     out = {"indexed": 0, "failed": 0, "chunks": 0, "details": []}
     for t in kb.unindexed_items():
         r = kb.index_item(t["key"], md_path=t["md"], log=lambda m: logging.info("[kb] %s", m))
@@ -257,6 +260,106 @@ def post_tool_run(payload: dict):
     return res
 
 
+@app.get("/api/lit/topics")
+def lit_topics():
+    """列出已保存的检索主题（config/topics/*.json，属本地用户数据）。"""
+    from core import litsearch
+    return litsearch.list_topics()
+
+
+@app.post("/api/lit/topics")
+def lit_save_topic(payload: dict):
+    """保存/更新一个检索主题（同名覆盖）。"""
+    from core import litsearch
+    try:
+        return litsearch.save_topic(payload)
+    except Exception as e:
+        raise HTTPException(400, f"主题保存失败：{e}")
+
+
+@app.post("/api/lit/topics/delete")
+def lit_delete_topic(payload: dict):
+    from core import litsearch
+    return {"ok": litsearch.delete_topic(payload.get("slug", ""))}
+
+
+@app.post("/api/lit/search")
+def lit_search(payload: dict):
+    """文献检索。payload: {queries[], since, sources[], per_page}"""
+    from core import litsearch
+    queries = [q for q in (payload.get("queries") or []) if q and q.strip()]
+    if not queries:
+        raise HTTPException(400, "请至少填写一条检索式")
+    sources = [s for s in (payload.get("sources") or ["openalex"]) if s in ("openalex", "arxiv")]
+    if not sources:
+        raise HTTPException(400, "请至少选择一个数据源")
+    since = (payload.get("since") or "").strip()
+    sort = payload.get("sort") or "relevance"
+    logs = []
+    try:
+        recs, errors, status = litsearch.run_search(
+            queries, since=since or None, sources=sources,
+            per_page=int(payload.get("per_page") or 25),
+            sort=sort, log=logs.append)
+        litsearch.mark_in_library(recs)
+    except Exception as e:
+        raise HTTPException(500, f"检索失败：{repr(e)[:150]}")
+    # 有源失败时必须显式告知（否则用户看不出结果少了一半）
+    degraded = [f"{litsearch.SRC_LABEL.get(k, k)}：{v['reason']}"
+                for k, v in status.items() if v.get("failed")]
+    # 降级的连带影响：arXiv 无被引数，OpenAlex 又挂了 → 「被引次数」排序会失真
+    if sort == "citations" and "arxiv" in sources and status.get("openalex", {}).get("failed"):
+        degraded.append("arXiv 不提供被引数，被引排序已失真，建议改用「相关度」或「最新」")
+    return {"count": len(recs), "results": recs, "errors": errors, "log": logs,
+            "status": status, "degraded": degraded}
+
+
+@app.post("/api/lit/expand")
+def lit_expand(payload: dict):
+    """引文追踪。payload: {record, direction: citing|referenced, limit, since}"""
+    from core import litsearch
+    rec = payload.get("record") or {}
+    direction = payload.get("direction") or "citing"
+    if direction not in ("citing", "referenced"):
+        raise HTTPException(400, "direction 只能是 citing 或 referenced")
+    since = (payload.get("since") or "").strip() or None
+    try:
+        got = litsearch.expand_citations(
+            rec, direction=direction,
+            limit=int(payload.get("limit") or 40), since=since)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except litsearch.RateLimited as e:
+        raise HTTPException(429, "OpenAlex 正在限流，引文追踪暂时不可用；额度恢复后再试")
+    except litsearch.ApiKeyInvalid:
+        raise HTTPException(400, "OpenAlex API Key 无效（401），请到「设置」核对或清空该 key")
+    except Exception as e:
+        raise HTTPException(500, f"引文追踪失败：{repr(e)[:150]}")
+    got = litsearch.mark_in_library(got)
+    return {"count": len(got), "results": got, "direction": direction,
+            "seed": (rec.get("title") or "")[:80]}
+
+
+@app.post("/api/lit/import")
+def lit_import(payload: dict):
+    """把选中的检索结果写进 Zotero。payload: {records[], collection, tags[], fetch_pdf}"""
+    from core import litsearch
+    records = payload.get("records") or []
+    if not records:
+        raise HTTPException(400, "没有选中任何条目")
+    logs = []
+    r = litsearch.import_records(
+        records,
+        collection=(payload.get("collection") or "").strip(),
+        tags=payload.get("tags") or [],
+        fetch_pdf=bool(payload.get("fetch_pdf")),
+        log=logs.append)
+    r["log"] = logs
+    if not r.get("ok"):
+        raise HTTPException(400, r.get("error") or "入库失败")
+    return r
+
+
 @app.get("/api/settings")
 def get_settings():
     return load_settings()
@@ -268,7 +371,126 @@ def post_settings(payload: dict):
         api_key=payload.get("api_key"),
         model=payload.get("model"),
         base_url=payload.get("base_url"),
+        openalex_key=payload.get("openalex_key"),
     )
+
+
+# ---------------------------------------------------------------- 本机路径（Zotero）
+
+@app.get("/api/paths")
+def get_paths():
+    """本机路径：当前配置 + 自动探测结果，供「设置 → 本机路径」使用。"""
+    from core import zotero_detect
+    from core.config import zotero_data_dir, zotero_exe
+    cur = load_paths()
+    return {
+        "zotero_data_dir": (cur.get("zotero_data_dir") or "").strip(),
+        "zotero_exe": (cur.get("zotero_exe") or "").strip(),
+        "detected": zotero_detect.detect(),
+        "effective": {"zotero_data_dir": zotero_data_dir(), "zotero_exe": zotero_exe()},
+    }
+
+
+@app.post("/api/paths")
+def post_paths(payload: dict):
+    """保存本机路径，并回传逐项校验结果（界面据此提示哪里填错了）。"""
+    from core import zotero_detect
+    d = save_paths(
+        zotero_data_dir=payload.get("zotero_data_dir"),
+        zotero_exe=payload.get("zotero_exe"),
+    )
+    ddir = (d.get("zotero_data_dir") or "").strip()
+    exe = (d.get("zotero_exe") or "").strip()
+    return {
+        "zotero_data_dir": ddir,
+        "zotero_exe": exe,
+        "data_dir_ok": zotero_detect.looks_like_data_dir(ddir),
+        "exe_ok": bool(exe) and os.path.isfile(exe),
+    }
+
+
+@app.post("/api/paths/detect")
+def post_paths_detect():
+    """重新自动探测（只读，不写配置）。"""
+    from core import zotero_detect
+    return zotero_detect.detect()
+
+
+@app.post("/api/paths/pick")
+def post_paths_pick(payload: dict):
+    """弹系统选择框代选本机路径——浏览器拿不到完整本地路径，只能由服务端弹窗。"""
+    from core import filepicker
+    if (payload.get("kind") or "dir").lower() == "exe":
+        p = filepicker.pick_file("选择 Zotero 程序（zotero.exe）",
+                                 "zotero.exe|zotero.exe|可执行文件 (*.exe)|*.exe")
+    else:
+        p = filepicker.pick_folder("选择 Zotero 数据目录（含 storage 文件夹的那一层）")
+    return {"path": p}
+
+
+# ---------------------------------------------------------------- 知识库向量模型
+
+@app.get("/api/embedding")
+def get_embedding():
+    return load_embedding()
+
+
+@app.post("/api/embedding")
+def post_embedding(payload: dict):
+    return save_embedding(
+        api_key=payload.get("api_key"),
+        base_url=payload.get("base_url"),
+        model=payload.get("model"),
+        provider=payload.get("provider"),
+    )
+
+
+@app.get("/api/setup/status")
+def setup_status():
+    """首次运行体检：逐项判断配置是否可用，供界面显示引导横幅。"""
+    from core import kb, zotero_detect
+    from core.config import zotero_data_dir, zotero_exe
+
+    s = load_settings()
+    ddir, exe = zotero_data_dir(), zotero_exe()
+
+    def _item(key, label, ok, where, hint, required=False, value=""):
+        return {"key": key, "label": label, "ok": bool(ok), "where": where,
+                "hint": hint, "required": required, "value": value}
+
+    items = [
+        _item("llm_key", "大模型 API Key", s["has_key"], "设置 → 大模型",
+              "不填无法生成笔记", required=True),
+        _item("zotero_data_dir", "Zotero 数据目录",
+              zotero_detect.looks_like_data_dir(ddir), "设置 → 本机路径",
+              "填错会读不到 PDF", required=True, value=ddir),
+        _item("zotero_exe", "Zotero 程序路径", bool(exe) and os.path.isfile(exe),
+              "设置 → 本机路径", "只影响自动拉起 Zotero，可留空", value=exe),
+        _item("embedding", "知识库向量模型", kb.embedding_available(), "设置 → 知识库",
+              "只影响语义检索，可留空"),
+    ]
+    try:
+        running = zotero_ping()
+    except Exception:
+        running = False
+    return {
+        "items": items,
+        "missing": [i["key"] for i in items if not i["ok"]],
+        "needs_setup": any(not i["ok"] and i["required"] for i in items),
+        "zotero_running": running,
+    }
+
+
+@app.get("/api/lit/quota")
+def lit_quota():
+    """查询 OpenAlex 当前额度（需在设置里填 API Key）。未配 key 时告知额度差异。"""
+    from core import litsearch
+    q = litsearch.quota()
+    if q is None:
+        return {"has_key": False,
+                "hint": "当前无 Key：每日额度 $0.1（约 100 次请求 / 20 轮检索）。"
+                        "免费注册后提升到 $1/天（10 倍），注册地址 openalex.org/settings/api"}
+    return q
 
 
 @app.get("/api/zotero_items")
@@ -293,6 +515,29 @@ def get_zotero_search(q: str = "", limit: int = 40):
 def get_zotero_ping():
     """检测 Zotero 本地 API 是否可用，供前端提示"请检查 Zotero 是否打开"。"""
     return {"ok": zotero_ping()}
+
+
+@app.get("/api/zotero/write_status")
+def zotero_write_status():
+    """Zotero 写权限状态。读（GET）不需要授权，写（POST/PUT/DELETE）必须授权。"""
+    from core import zotero_io
+    return {"authorized": zotero_io.write_authorized()}
+
+
+@app.post("/api/zotero/authorize")
+def zotero_authorize(payload: dict):
+    """触发 Zotero 授权弹窗并保存写入密钥。用户需在弹窗里选「Always Allow」。"""
+    from core import zotero_io
+    try:
+        r = zotero_io.authorize_local(payload.get("app_name") or "literature_flow")
+    except Exception as e:
+        hint = zotero_io.write_error_hint(e)
+        raise HTTPException(400, f"授权失败：{repr(e)[:160]}" + (f"｜{hint}" if hint else ""))
+    if not r.get("ok"):
+        raise HTTPException(400, "Zotero 没有返回密钥（可能被拒绝）。请重试，并在弹窗里选「Always Allow」")
+    if not r.get("saved"):
+        raise HTTPException(400, "只拿到了「一次性」授权。请在 Zotero 弹窗里改选「Always Allow」再试一次。")
+    return r
 
 
 @app.get("/api/zotero_collections")

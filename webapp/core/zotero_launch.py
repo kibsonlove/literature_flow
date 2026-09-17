@@ -4,7 +4,7 @@ import os
 import subprocess
 import time
 
-from .config import ZOTERO_EXE, ZOTERO_WAIT_SECONDS
+from .config import ZOTERO_WAIT_SECONDS, zotero_exe
 from .zotero_io import ping
 
 
@@ -26,13 +26,15 @@ def ensure_zotero(wait_seconds=ZOTERO_WAIT_SECONDS, log=None):
         say("Zotero 已在运行")
         return True
 
-    if not os.path.exists(ZOTERO_EXE):
-        say(f"未找到 Zotero 程序：{ZOTERO_EXE}（可在 core/config.py 修改 ZOTERO_EXE）")
+    exe = zotero_exe()
+    if not exe or not os.path.exists(exe):
+        say(f"未找到 Zotero 程序：{exe or '（未配置）'}。"
+            "请在网页顶栏「设置 → 本机路径」填入 zotero.exe 位置，或点「自动探测」")
         return False
 
     try:
-        subprocess.Popen([ZOTERO_EXE], close_fds=True)
-        say(f"已启动 Zotero：{ZOTERO_EXE}，等待本地 API 就绪…")
+        subprocess.Popen([exe], close_fds=True)
+        say(f"已启动 Zotero：{exe}，等待本地 API 就绪…")
     except Exception as e:
         say(f"启动 Zotero 失败：{e}")
         return False

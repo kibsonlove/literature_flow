@@ -15,10 +15,21 @@
       <button id="batchBtn" class="ghost">批量笔记</button>
       <button id="papersetBtn" class="ghost">论文对比</button>
       <button id="kbBtn" class="ghost">语义检索</button>
+      <button id="litBtn" class="ghost">文献检索</button>
       <button id="toolsBtn" class="ghost">工具箱</button>
       <button id="settingsBtn" class="ghost">设置</button>
     </div>
   </header>
+
+  <!-- 首次运行引导：缺配置时显示，不阻塞使用 -->
+  <div id="setupBanner" class="setup-banner hidden">
+    <div class="sb-title">还差几步就能用了</div>
+    <ul id="setupList"></ul>
+    <div class="row">
+      <button id="setupOpenBtn">打开设置</button>
+      <button id="setupLaterBtn" class="ghost">稍后再说</button>
+    </div>
+  </div>
 
   <!-- 设置抽屉 -->
   <div id="settingsPanel" class="panel hidden">
@@ -32,6 +43,56 @@
     <label>Base URL
       <input id="baseUrl" type="text" placeholder="https://api.deepseek.com">
     </label>
+    <hr>
+    <div class="small" style="color:#555;margin-bottom:.2em">本机路径（Zotero）</div>
+    <label>Zotero 数据目录
+      <input id="zoteroDataDir" type="text" placeholder="含 storage 文件夹的那一层，如 C:/Users/你/Zotero">
+    </label>
+    <div class="small muted" style="margin-bottom:.4em">
+      填错会读不到 PDF。不知道在哪：Zotero 里「编辑 → 设置 → 高级 → 文件和文件夹」可看到数据目录位置。
+    </div>
+    <div class="row">
+      <button id="detectPaths" class="ghost">自动探测</button>
+      <button id="pickDataDir" class="ghost">浏览数据目录…</button>
+      <button id="pickExe" class="ghost">选择 zotero.exe…</button>
+      <span id="pathsHint" class="small muted"></span>
+    </div>
+    <label>Zotero 程序路径（可留空）
+      <input id="zoteroExe" type="text" placeholder="C:/Program Files/Zotero/zotero.exe">
+    </label>
+    <hr>
+    <div class="small" style="color:#555;margin-bottom:.2em">知识库向量模型（语义检索用，可留空）</div>
+    <label>Embedding API Key
+      <input id="embKey" type="text" placeholder="留空则「语义检索」不可用" autocomplete="off">
+    </label>
+    <label>Embedding Base URL
+      <input id="embBaseUrl" type="text" placeholder="https://api.siliconflow.cn/v1">
+    </label>
+    <label>Embedding 模型
+      <input id="embModel" type="text" placeholder="BAAI/bge-m3">
+    </label>
+    <div class="small muted" style="margin-bottom:.6em">
+      默认用硅基流动的 BAAI/bge-m3（1024 维、免费）：
+      <a href="https://cloud.siliconflow.cn/account/ak" target="_blank" rel="noopener">注册领取 Key</a>。
+    </div>
+    <hr>
+    <label>OpenAlex API Key（文献检索用，可留空）
+      <input id="openalexKey" type="text" placeholder="留空则用匿名额度：每天约 20 轮检索" autocomplete="off">
+    </label>
+    <div class="small muted" style="margin-bottom:.6em">
+      免费注册约 30 秒：<a href="https://openalex.org/settings/api" target="_blank" rel="noopener">openalex.org/settings/api</a>
+      登录后复制页面上的 key 粘贴到上面。额度从每天 $0.1 提到 $1（10 倍），还能查看用量。
+    </div>
+    <hr>
+    <div class="small" style="color:#555;margin-bottom:.2em">Zotero 写入授权</div>
+    <div class="row">
+      <span id="zoteroWriteStatus" class="muted">检测中…</span>
+      <button id="zoteroAuthorize" class="ghost">授权写入</button>
+    </div>
+    <div class="small muted" style="margin-bottom:.6em">
+      Zotero 本地 API：<b>读</b>不需要授权，<b>写</b>（建条目 / 写笔记 / 打标签 / 建分类）必须授权一次。
+      点按钮后 Zotero 会弹窗，请选 <b>「Always Allow」</b>（永久允许）——选「Allow」只够用一次。
+    </div>
     <div class="row">
       <button id="saveSettings">保存</button>
       <span id="settingsHint"></span>
@@ -204,6 +265,68 @@
       <div id="kbResults" class="ps-list" style="max-height:420px;overflow:auto"></div>
       <div class="small">检索范围：已建索引的文献全文（MinerU 结构化文本），已启用「中英双语扩展 + 关键词兜底」混合检索——
         问题会自动翻成另一种语言一起检索，专名/数字由关键词命中兜底。点「查看解析」可核对原文；表格块整块给出。</div>
+    </div>
+  </div>
+
+  <!-- 文献检索（OpenAlex + arXiv，支持引文追踪与批量入库） -->
+  <div id="litPanel" class="overlay hidden">
+    <div class="modal modal-wide">
+      <div class="modal-head">
+        <h2>文献检索</h2>
+        <button id="litClose" class="ghost">关闭</button>
+      </div>
+
+      <div class="row">
+        <select id="litTopicSel" style="max-width:240px"></select>
+        <button id="litTopicLoad" class="ghost">载入主题</button>
+        <button id="litTopicSave" class="ghost">保存为主题</button>
+        <button id="litTopicDel" class="ghost">删除主题</button>
+        <span class="muted">主题存在本机 config/topics/，下次一键重跑</span>
+      </div>
+
+      <div class="row">
+        <input id="litName" placeholder="主题名，如：可解释人工智能">
+        <input id="litSince" placeholder="起始年，如 2021" style="max-width:132px;min-width:0">
+        <input id="litPer" placeholder="每条取 N 条" style="max-width:120px;min-width:0" value="100">
+        <input id="litCollection" placeholder="入库到 Zotero 分类（不存在则新建）">
+      </div>
+
+      <div class="row lit-opts">
+        <span class="muted">数据源</span>
+        <label class="radio"><input type="checkbox" id="litSrcOA" checked> OpenAlex（期刊/会议 + 引文图）</label>
+        <label class="radio"><input type="checkbox" id="litSrcAX" checked> arXiv（CS 预印本）</label>
+        <span class="muted">排序</span>
+        <select id="litSort" style="max-width:132px">
+          <option value="relevance">相关度</option>
+          <option value="citations">被引次数</option>
+          <option value="date">最新</option>
+        </select>
+        <label class="radio"><input type="checkbox" id="litFetchPdf" checked> 入库时抓取开放获取全文</label>
+      </div>
+
+      <textarea id="litQueries" class="lit-queries" spellcheck="false"
+        placeholder="每行一条检索式，支持 AND / OR / NOT 与双引号短语。例如：&#10;(&quot;explainable AI&quot; OR &quot;interpretable machine learning&quot;) AND (visualization OR &quot;visual analytics&quot;)"></textarea>
+
+      <div class="row">
+        <button id="litRun" class="primary">检索</button>
+        <button id="litImport" class="primary">入库选中</button>
+        <button id="litExport" class="ghost">导出 CSV</button>
+        <span id="litStatus" class="status"></span>
+      </div>
+
+      <div class="lit-toolbar">
+        <label class="radio"><input type="checkbox" id="litSelAll"> 全选</label>
+        <label class="radio"><input type="checkbox" id="litHideLib" checked> 隐藏已在库</label>
+        <span id="litCount" class="muted">尚未检索</span>
+        <button id="litClearCache" class="ghost lit-mini">清空结果</button>
+        <button id="litQuota" class="ghost lit-mini">查额度</button>
+        <span class="lit-tip">点「摘要」展开原文摘要；「追引用」找引用它的后续工作，「参考文献」找它的奠基文献</span>
+      </div>
+
+      <div id="litWarn" class="zp-warn hidden"></div>
+
+      <div class="lit-wrap"><table id="litTable" class="lit-table"></table></div>
+      <pre id="litLog" class="lit-log">（运行日志）</pre>
     </div>
   </div>
 
