@@ -128,27 +128,58 @@ venv\Scripts\python -m uvicorn app:app --host 127.0.0.1 --port 8000
 
 ---
 
-## 七、目录结构
+## 七、目录结构：哪些要动、哪些别碰
 
-| 目录 | 内容 |
-|---|---|
-| `webapp/` | 主应用（FastAPI + 原生前端）。日常只需要动 `webapp/config/` |
-| `webapp/config/` | 你的密钥、Zotero 路径、学科维度模板（全部不入库） |
-| `webapp/cache/` | 运行数据：向量库与解析缓存（可再生） |
-| `scripts/` | 独立脚本：`subscribe/` 订阅、`pipeline/` 笔记汇总、`dedup/` 去重、`tags/` 标签分析 |
-| `reports/` `notes/` | 运行后生成的报告与素材包（不入库） |
-| `docs/` | 《项目架构与上手指南》，含架构图与详细排错 |
+| 目录 / 文件 | 内容 | 要不要动 |
+|---|---|---|
+| `webapp/` | 主应用（FastAPI + 原生前端） | 代码别改 |
+| `webapp/config/` | 你的密钥、Zotero 路径、学科维度模板（**不入库**） | ✅ 就动这里——或者直接在界面「设置」里改 |
+| `webapp/cache/` | 运行数据：向量库 `kb.sqlite`、MinerU 解析缓存 | 别手动改；删了会重建 |
+| `webapp/logs/` | 服务日志 | 可随时删 |
+| `notes/` `reports/` `archive/` | 素材包、报告、历史产物（**不入库**） | 看看就好。`notes/` 被程序按固定路径读写，**别改文件名** |
+| `scripts/` | 独立脚本：`subscribe/` 订阅、`pipeline/` 汇总、`dedup/` 去重、`tags/` 标签分析 | 用到时再说 |
+| `scripts/subscribe/lit_journals.txt`、`lit_keywords.txt` | 订阅的期刊名单与关键词 | ✅ 想订阅什么就编辑这两个 |
+| `docs/` | 《项目架构与开发指南》：架构图、模块职责、数据流 | 想读懂代码时看 |
+| `README.md` | 本文件——安装、配置、使用、排错的**唯一出处** | — |
 
 ---
 
-## 八、关于哪些东西没随仓库分发
+## 八、仓库包含什么、不含什么（推送范围）
 
-仓库只包含**通用代码与文档**。以下内容属于使用者个人的研究数据，需要你自己在本地生成或维护，**不会出现在仓库里**：
+仓库只包含**通用代码与文档**：给谁用都一样的部分会推上去；属于你个人研究数据的部分留在本地。
 
-- `webapp/config/` 下的全部真实配置（密钥、路径）
-- `notes/`、`reports/`、`archive/` 里的产物
-- 订阅用的期刊名单与关键词（仓库只给 `.example.txt` 模板）
-- 一部分带有个人研究预设的分析脚本。工具箱里若点到它们，会提示「脚本未找到……部分个人分析脚本默认不随仓库分发」，这是预期行为，不是故障
+### 会推送到仓库的
+
+- 全部程序代码：`webapp/`（除去 `config/` 真实配置、`cache/`、`logs/`）
+- 脚本中**通用**的那几个：`scripts/subscribe/lit_watch.py`、`scripts/dedup/zot_dedup.py`、`scripts/tags/tag_analysis.py`、`scripts/pipeline/build_pack.py`、`scripts/debug/zot_read.py`
+- 文档：`README.md`、`docs/项目架构与开发指南.md`
+- 格式模板：`webapp/config/*.example.json`、`scripts/subscribe/*.example.txt`、`.gitignore`
+- 打包脚本：`build_exe.bat`、`build_exe.spec`
+
+### 不会推送的（已写进 `.gitignore`，实测逐条生效）
+
+| 被忽略的 | 为什么 |
+|---|---|
+| `webapp/config/` 下的**真实**配置：`settings.json`、`paths.json`、`embedding.json`、`domain.json`、`topics/` | 含你的 API key、Zotero 本机路径、检索主题 |
+| `webapp/cache/`、`webapp/logs/` | 运行数据与日志，可再生产 |
+| `webapp/start.local.bat`、`serve.local.bat`（规则 `*.local.bat`） | 硬编码本机 Python 绝对路径的专用启动器 |
+| `notes/`、`reports/`、`archive/` | 你的研究产物 |
+| `scripts/subscribe/lit_journals.txt`、`lit_keywords.txt` | 你的期刊名单与关键词 |
+| `scripts/pipeline/*`、`scripts/dedup/*`、`scripts/tags/*` 里的个人预设脚本与历史方案 | 含你的研究预设与本机路径 |
+| `docs/research/` | 个人研究笔记 |
+| `_trash_*/`、`_build/`、`dist/` | 临时目录与构建产物 |
+
+> ⚠️ `scripts/pipeline/extract_journals.py` 里写到过 `C:\Users\<用户名>\Desktop\毕业论文\…` 这类本机路径，
+> 全靠 `scripts/pipeline/*` 这条规则挡着——**不要放开它**。
+>
+> ℹ️ 工具箱里点到这些未分发的个人脚本时，会提示「脚本未找到……部分个人分析脚本默认不随仓库分发」——
+> 这是预期行为，不是故障。
+
+想核对某个文件到底会不会被提交，在项目根目录执行：
+
+```bash
+git check-ignore -v <文件路径>     # 有输出 = 已忽略；无输出 = 会被提交
+```
 
 ---
 
@@ -167,4 +198,5 @@ venv\Scripts\python -m uvicorn app:app --host 127.0.0.1 --port 8000
 | 笔记的维度不像我这个学科 | 领域包没匹配上，回退到了通用维度。可在 `webapp/config/domains/` 里给对应学科补关键词 |
 | 精读出来的数字对不上原文 | 该文献还没被 MinerU 解析过，表格数据没喂给模型。配置 `webapp/core/mineru_key.txt` 可改善 |
 
-更多架构细节与排错见 **`docs/项目架构与上手指南.md`**。
+以上是使用说明的全部内容。想读懂代码结构、改功能或深入排错，见 **`docs/项目架构与开发指南.md`**
+（技术栈、模块职责、数据流、架构图）。
