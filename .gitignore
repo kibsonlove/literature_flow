@@ -33,3 +33,7 @@ reports/*
 _build/
 dist/
 build/
+
+# 本机专用启动器：硬编码本机 Python 绝对路径，不随仓库分发。
+# 通用入口仍是 webapp/start.bat（优先找 webapp/venv，找不到才回退 python）。
+*.local.bat

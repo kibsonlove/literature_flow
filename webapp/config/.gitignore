@@ -4,5 +4,6 @@ embedding.json
 paths.json
 domain.json
 domains/
+topics/
 temp/
 __pycache__/
