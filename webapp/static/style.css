@@ -149,3 +149,5 @@ code { background: #eef1f5; padding: .05em .35em; border-radius: 4px; font-size:
 #settingsPanel .ghost:hover, #setupBanner .ghost:hover { background: #eef3ff; color: #1b4dc0; border-color: #1b4dc0; }
 #settingsPanel .muted, #setupBanner .muted { color: #666; }
 #pathsHint, #dataDirHint { flex: 1 1 100%; }
+/* 浏览器内核下载日志 */
+.pw-log { max-height: 120px; overflow: auto; background: #f7f4ee; border-radius: 6px; padding: .5em .7em; font-size: .78em; white-space: pre-wrap; margin: 0 0 .6em; }

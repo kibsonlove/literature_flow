@@ -79,6 +79,7 @@ async function loadPathsInto() {
   $("webchatProfileDir").value = d.webchat_profile_dir || "";
   const eff = d.effective || {};
   _paintDataDirHint(eff.data_dir ? "当前生效：" + eff.data_dir : "");
+  _pollPw();   // 顺便刷新浏览器内核的安装状态
 }
 
 async function loadEmbeddingInto() {
@@ -168,6 +169,46 @@ $("pickExe").onclick = () => pickPath("exe", "zoteroExe");
 $("pickDataRoot").onclick = () => pickPath("data_dir", "dataDir", _paintDataDirHint);
 $("pickBrowsers").onclick = () => pickPath("browsers", "pwBrowsersDir", _paintDataDirHint);
 $("pickProfile").onclick = () => pickPath("webchat_profile", "webchatProfileDir", _paintDataDirHint);
+
+// ---- 浏览器内核：一键下载（后台跑，前端轮询进度）----
+let _pwTimer = null;
+
+function _paintPwLog(lines) {
+  const el = $("pwLog");
+  if (!lines || !lines.length) { el.classList.add("hidden"); el.textContent = ""; return; }
+  el.classList.remove("hidden");
+  el.textContent = lines.join("\n");
+  el.scrollTop = el.scrollHeight;
+}
+
+async function _pollPw() {
+  try {
+    const s = await (await fetch("/api/playwright/status")).json();
+    if (s.log && s.log.length) _paintPwLog(s.log);
+    $("pwHint").textContent = s.installed ? "已装好" : "尚未安装";
+    if (!s.running) {
+      if (_pwTimer) { clearInterval(_pwTimer); _pwTimer = null; }
+      $("installChromium").disabled = false;
+      if (s.ok === true) $("pwHint").textContent = "已装好 → 可直接用";
+      if (s.ok === false) $("pwHint").textContent = "下载失败，详见下方日志";
+    }
+  } catch (e) { /* 拿不到状态不影响其它功能 */ }
+}
+
+$("installChromium").onclick = async () => {
+  $("installChromium").disabled = true;
+  $("pwHint").textContent = "正在下载…";
+  _paintPwLog(["正在启动下载…"]);
+  try {
+    await postJSON("/api/playwright/install", {});
+    if (_pwTimer) clearInterval(_pwTimer);
+    _pwTimer = setInterval(_pollPw, 2000);
+    _pollPw();
+  } catch (e) {
+    $("installChromium").disabled = false;
+    $("pwHint").textContent = "启动失败：" + e.message;
+  }
+};
 
 // ---- 首次运行引导：缺必填配置时给横幅，而不是等用户撞报错 ----
 async function refreshSetupBanner() {

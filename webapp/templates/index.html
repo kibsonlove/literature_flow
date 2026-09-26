@@ -74,15 +74,28 @@
       想省系统盘空间，可以改到大容量磁盘。
     </div>
     <details style="margin-bottom:.6em">
-      <summary class="small" style="cursor:pointer;color:#555">高级：单独指定浏览器内核 / 网页端登录资料目录</summary>
+      <summary class="small" style="cursor:pointer;color:#555">高级：浏览器内核 / 网页端登录资料目录</summary>
       <label style="margin-top:.6em">浏览器内核目录（可留空）
         <input id="pwBrowsersDir" type="text" placeholder="留空 = 数据目录下的 playwright_browsers">
       </label>
+      <div class="row">
+        <button id="pickBrowsers" class="ghost">浏览…</button>
+        <button id="installChromium" class="ghost">一键下载内核（约 150MB）</button>
+        <span id="pwHint" class="small muted"></span>
+      </div>
+      <div class="small muted" style="margin-bottom:.4em">
+        用「网页端」模式（走网页版大模型、零 API 费用）时需要一个真实浏览器内核。
+        点上面的按钮会自动下载到此处配置的目录，装完即可用，不用手填路径。
+      </div>
+      <pre id="pwLog" class="pw-log hidden"></pre>
       <label>网页端登录资料目录（可留空）
         <input id="webchatProfileDir" type="text" placeholder="留空 = 数据目录下的 webchat_profile">
       </label>
+      <div class="small muted" style="margin-bottom:.4em">
+        这里存的是你在网页版大模型站点登录后的状态（cookie 等），留着就不用每次重新登录；
+        删掉只会让你下次重新登录一次，没有别的影响。
+      </div>
       <div class="row">
-        <button id="pickBrowsers" class="ghost">浏览内核目录…</button>
         <button id="pickProfile" class="ghost">浏览登录资料目录…</button>
       </div>
     </details>

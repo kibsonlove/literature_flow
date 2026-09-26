@@ -505,6 +505,82 @@ def post_mineru_key(payload: dict):
     return {"ok": True, "has_key": bool(k), "path": path}
 
 
+# ---------------------------------------------------------------- 浏览器内核（网页端模式用）
+
+_PW_STATE = {"running": False, "log": [], "ok": None, "started": 0}
+
+
+def _chromium_installed():
+    """配置的浏览器目录里是否已经有 chromium 内核。"""
+    from core.config import playwright_browsers_dir
+    try:
+        return any(d.startswith("chromium") for d in os.listdir(playwright_browsers_dir()))
+    except Exception:
+        return False
+
+
+@app.get("/api/playwright/status")
+def playwright_status():
+    """浏览器内核安装状态（前端轮询用）。"""
+    from core.config import playwright_browsers_dir
+    return {
+        "installed": _chromium_installed(),
+        "dir": playwright_browsers_dir(),
+        "running": _PW_STATE["running"],
+        "ok": _PW_STATE["ok"],
+        "log": _PW_STATE["log"][-40:],
+    }
+
+
+@app.post("/api/playwright/install")
+def playwright_install():
+    """下载 Playwright 的 chromium 内核到「浏览器内核目录」（约 150MB）。
+
+    后台线程执行——下载要几分钟，同步做会把请求卡死；前端轮询 status 拿进度。
+    内核会**直接下到界面上配的那个目录**，所以装完不需要再手填路径。
+    """
+    import subprocess
+    import sys
+    import threading
+    import time as _time
+    from core.config import playwright_browsers_dir
+
+    if _PW_STATE["running"]:
+        return {"ok": False, "error": "已经在下载了，等它跑完再点"}
+
+    target = playwright_browsers_dir()
+
+    def log(m):
+        _PW_STATE["log"].append(m)
+        _PW_STATE["log"] = _PW_STATE["log"][-60:]
+
+    def _run():
+        try:
+            os.makedirs(target, exist_ok=True)
+            log("目标目录：" + target)
+            log("开始下载 chromium 内核（约 150MB，视网速可能要几分钟）…")
+            env = dict(os.environ, PLAYWRIGHT_BROWSERS_PATH=target)
+            p = subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"],
+                               capture_output=True, text=True, encoding="utf-8",
+                               errors="replace", env=env, timeout=3600)
+            tail = ((p.stdout or "") + (p.stderr or "")).strip()[-600:]
+            if p.returncode == 0:
+                log("下载完成，内核位置：" + target)
+                _PW_STATE["ok"] = True
+            else:
+                log("下载失败（退出码 %s）：%s" % (p.returncode, tail))
+                _PW_STATE["ok"] = False
+        except Exception as e:
+            log("下载出错：" + repr(e)[:200])
+            _PW_STATE["ok"] = False
+        finally:
+            _PW_STATE["running"] = False
+
+    _PW_STATE.update({"running": True, "log": [], "ok": None, "started": _time.time()})
+    threading.Thread(target=_run, daemon=True).start()
+    return {"ok": True, "dir": target}
+
+
 # ---------------------------------------------------------------- 知识库向量模型
 
 @app.get("/api/embedding")
