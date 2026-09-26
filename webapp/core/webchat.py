@@ -23,14 +23,32 @@ def _paths_cfg():
     except Exception:
         return {}
 
-_CFG = _paths_cfg()
-# 优先级：环境变量 > config/paths.json > 项目内默认位置
-BROWSER_DIR = (os.environ.get("PLAYWRIGHT_BROWSERS_DIR")
-               or _CFG.get("playwright_browsers_dir")
-               or os.path.join(_APP_DIR, "cache", "playwright_browsers"))
-PROFILE_DIR = (os.environ.get("WEBCHAT_PROFILE_DIR")
-               or _CFG.get("webchat_profile_dir")
-               or os.path.join(_APP_DIR, "cache", "webchat_profile"))
+def _override(key, env_name):
+    """路径覆盖：环境变量 > 设置里填的值 > 空（留给调用方给默认值）。"""
+    v = (os.environ.get(env_name) or "").strip()
+    if not v:
+        v = (_paths_cfg().get(key) or "").strip()
+    if v:
+        p = os.path.normpath(os.path.expandvars(v))
+        if os.path.isabs(p):
+            return p
+    return ""
+
+
+def browser_dir():
+    """浏览器内核目录：环境变量 > 设置 > 数据目录下的默认位置。"""
+    from .config import data_path
+    return (_override("playwright_browsers_dir", "PLAYWRIGHT_BROWSERS_DIR")
+            or os.path.normpath(data_path("playwright_browsers")))
+
+
+def profile_dir():
+    """网页端登录资料目录（存 cookie / 登录态）：优先级同上。"""
+    from .config import data_path
+    return (_override("webchat_profile_dir", "WEBCHAT_profile_dir()")
+            or os.path.normpath(data_path("webchat_profile")))
+
+
 DEEPSEEK_URL = "https://chat.deepseek.com"
 
 def _apply_browser_path():
@@ -38,11 +56,12 @@ def _apply_browser_path():
     Playwright 的查找路径；否则保留默认位置——这样新用户直接
     `playwright install chromium` 装到系统默认目录即可使用。"""
     try:
-        if os.path.isdir(BROWSER_DIR) and any(
-            d.startswith("chromium") and os.path.isdir(os.path.join(BROWSER_DIR, d))
-            for d in os.listdir(BROWSER_DIR)
+        bd = browser_dir()
+        if os.path.isdir(bd) and any(
+            d.startswith("chromium") and os.path.isdir(os.path.join(bd, d))
+            for d in os.listdir(bd)
         ):
-            os.environ["PLAYWRIGHT_BROWSERS_PATH"] = BROWSER_DIR
+            os.environ["PLAYWRIGHT_BROWSERS_PATH"] = bd
     except Exception:
         pass
 
@@ -67,16 +86,16 @@ def run_webchat(pdf_path, prompt, title="", headless=False, timeout=300, log=Non
     if not os.path.exists(pdf_path):
         raise RuntimeError(f"找不到 PDF：{pdf_path}")
 
-    os.makedirs(PROFILE_DIR, exist_ok=True)
+    os.makedirs(profile_dir(), exist_ok=True)
     _apply_browser_path()
 
     with sync_playwright() as p:
         say("启动浏览器（复用登录态 profile）…")
-        # 关键：用持久化上下文，登录态（cookie/localStorage）落盘到 PROFILE_DIR，
+        # 关键：用持久化上下文，登录态（cookie/localStorage）落盘到 profile_dir()，
         # 之后各次运行自动复用，无需重复登录。
         try:
             context = p.chromium.launch_persistent_context(
-                user_data_dir=PROFILE_DIR,
+                user_data_dir=profile_dir(),
                 headless=headless,
                 args=[
                     "--disable-blink-features=AutomationControlled",
@@ -691,12 +710,12 @@ class WebChatSession:
     def open(self):
         from playwright.sync_api import sync_playwright
 
-        os.makedirs(PROFILE_DIR, exist_ok=True)
+        os.makedirs(profile_dir(), exist_ok=True)
         _apply_browser_path()
         self._pw = sync_playwright().start()
         try:
             self._ctx = self._pw.chromium.launch_persistent_context(
-                user_data_dir=PROFILE_DIR,
+                user_data_dir=profile_dir(),
                 headless=self.headless,
                 args=["--disable-blink-features=AutomationControlled", "--start-maximized"],
                 ignore_default_args=["--enable-automation"],
@@ -775,12 +794,12 @@ class WebChatTextSession:
     def open(self, fresh=True):
         from playwright.sync_api import sync_playwright
 
-        os.makedirs(PROFILE_DIR, exist_ok=True)
+        os.makedirs(profile_dir(), exist_ok=True)
         _apply_browser_path()
         self._pw = sync_playwright().start()
         try:
             self._ctx = self._pw.chromium.launch_persistent_context(
-                user_data_dir=PROFILE_DIR,
+                user_data_dir=profile_dir(),
                 headless=self.headless,
                 args=["--disable-blink-features=AutomationControlled", "--start-maximized"],
                 ignore_default_args=["--enable-automation"],

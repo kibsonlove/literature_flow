@@ -9,7 +9,8 @@ webapp/config/settings.json
 webapp/config/embedding.json
 webapp/config/paths.json
 webapp/config/domains/
-webapp/core/mineru_key.txt
+# MinerU 平台 key：无论放在 config/（新位置）还是 core/（旧位置）都不入库
+mineru_key.txt
 .workbuddy/
 scripts/subscribe/lit_keywords.txt
 archive/

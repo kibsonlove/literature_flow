@@ -148,4 +148,4 @@ code { background: #eef1f5; padding: .05em .35em; border-radius: 4px; font-size:
 /* 同 litPanel：局部盖掉全局 button:hover 的低对比度，只作用于设置面板与引导横幅内的描边按钮 */
 #settingsPanel .ghost:hover, #setupBanner .ghost:hover { background: #eef3ff; color: #1b4dc0; border-color: #1b4dc0; }
 #settingsPanel .muted, #setupBanner .muted { color: #666; }
-#pathsHint { flex: 1 1 100%; }
+#pathsHint, #dataDirHint { flex: 1 1 100%; }

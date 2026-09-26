@@ -61,6 +61,32 @@
       <input id="zoteroExe" type="text" placeholder="C:/Program Files/Zotero/zotero.exe">
     </label>
     <hr>
+    <div class="small" style="color:#555;margin-bottom:.2em">数据目录</div>
+    <label>数据目录（缓存 / 向量库 / 浏览器内核）
+      <input id="dataDir" type="text" placeholder="留空 = 放在项目内 webapp\cache">
+    </label>
+    <div class="row">
+      <button id="pickDataRoot" class="ghost">浏览…</button>
+      <span id="dataDirHint" class="small muted"></span>
+    </div>
+    <div class="small muted" style="margin-bottom:.6em">
+      这些数据都是可再生的（删了会重建）。默认放在项目目录里——删掉项目文件夹就能全部清理干净；
+      想省系统盘空间，可以改到大容量磁盘。
+    </div>
+    <details style="margin-bottom:.6em">
+      <summary class="small" style="cursor:pointer;color:#555">高级：单独指定浏览器内核 / 网页端登录资料目录</summary>
+      <label style="margin-top:.6em">浏览器内核目录（可留空）
+        <input id="pwBrowsersDir" type="text" placeholder="留空 = 数据目录下的 playwright_browsers">
+      </label>
+      <label>网页端登录资料目录（可留空）
+        <input id="webchatProfileDir" type="text" placeholder="留空 = 数据目录下的 webchat_profile">
+      </label>
+      <div class="row">
+        <button id="pickBrowsers" class="ghost">浏览内核目录…</button>
+        <button id="pickProfile" class="ghost">浏览登录资料目录…</button>
+      </div>
+    </details>
+    <hr>
     <div class="small" style="color:#555;margin-bottom:.2em">知识库向量模型（语义检索用，可留空）</div>
     <label>Embedding API Key
       <input id="embKey" type="text" placeholder="留空则「语义检索」不可用" autocomplete="off">
@@ -74,6 +100,13 @@
     <div class="small muted" style="margin-bottom:.6em">
       默认用硅基流动的 BAAI/bge-m3（1024 维、免费）：
       <a href="https://cloud.siliconflow.cn/account/ak" target="_blank" rel="noopener">注册领取 Key</a>。
+    </div>
+    <label>MinerU API Key（长文精读 / 语义检索用，可留空）
+      <input id="mineruKey" type="text" placeholder="留空则拿不到原文表格里的数据；mineru.net 注册即得" autocomplete="off">
+    </label>
+    <div class="small muted" style="margin-bottom:.6em">
+      不填也能正常精读单篇文献，只是会降级成纯文本处理。以前要手建 core/mineru_key.txt，
+      现在在这里填就行（会写到 config/mineru_key.txt）。
     </div>
     <hr>
     <label>OpenAlex API Key（文献检索用，可留空）

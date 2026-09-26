@@ -7,8 +7,9 @@
     3. GET  /api/v4/extract-results/batch/{batch_id}  轮询解析状态
     4. 下载 full_zip_url → 解出 full.md → 存缓存 → 抽取表格块
 
-缓存：cache/mineru/<item_key 或文件名哈希>.md，命中即不再调用 API。
-Key：core/mineru_key.txt（不入代码）。
+缓存：<数据目录>/mineru/<item_key 或文件名哈希>.md，命中即不再调用 API。
+     数据目录默认在项目内 webapp/cache，可在页面「设置 → 本机路径」改到别的盘。
+Key：config/mineru_key.txt（不入 git）；也可以在页面「设置」里直接填。
 """
 import io
 import os
@@ -21,15 +22,34 @@ import urllib.request
 import urllib.error
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
-KEY_FILE = os.path.join(_DIR, "mineru_key.txt")
-CACHE_DIR = os.path.join(_DIR, "..", "cache", "mineru")
 API_BASE = "https://mineru.net/api/v4"
 POLL_INTERVAL = 8        # 秒
 POLL_TIMEOUT = 600       # 单篇最长等待 10 分钟
 
+
+def key_file():
+    """MinerU key 文件：config/mineru_key.txt。
+
+    早期版本把它放在 core/（代码目录）里——用户数据不该混进代码目录，已改到 config/；
+    旧位置若还存在仍然读，避免已配好的用户失效。
+    """
+    new = os.path.normpath(os.path.join(_DIR, "..", "config", "mineru_key.txt"))
+    old = os.path.join(_DIR, "mineru_key.txt")
+    if os.path.isfile(new):
+        return new
+    return old if os.path.isfile(old) else new
+
+
+def cache_dir():
+    """MinerU 解析缓存目录（跟随「数据目录」设置）。"""
+    from .config import data_path
+    return os.path.normpath(data_path("mineru"))
+
+
 def _key():
     try:
-        return open(KEY_FILE, encoding="utf-8").read().strip()
+        with open(key_file(), encoding="utf-8") as f:
+            return f.read().strip()
     except Exception:
         return ""
 
@@ -54,11 +74,12 @@ def _cache_path(item_key, pdf_path):
     h = _content_hash(pdf_path)
     if item_key:
         try:
-            os.makedirs(CACHE_DIR, exist_ok=True)
-            open(os.path.join(CACHE_DIR, f"{item_key}.map"), "w", encoding="utf-8").write(h)
+            cd = cache_dir()
+            os.makedirs(cd, exist_ok=True)
+            open(os.path.join(cd, f"{item_key}.map"), "w", encoding="utf-8").write(h)
         except Exception:
             pass
-    return os.path.normpath(os.path.join(CACHE_DIR, f"{h}.md"))
+    return os.path.normpath(os.path.join(cache_dir(), f"{h}.md"))
 
 def _post(url, payload):
     req = urllib.request.Request(url, data=json_dumps(payload), headers=_headers(), method="POST")
@@ -302,21 +323,21 @@ def cache_file(item_key):
         from .extract import pdf_path_from_zotero_key
         pp = pdf_path_from_zotero_key(item_key)
         if pp:
-            cand = os.path.normpath(os.path.join(CACHE_DIR, f"{_content_hash(pp)}.md"))
+            cand = os.path.normpath(os.path.join(cache_dir(), f"{_content_hash(pp)}.md"))
             if os.path.exists(cand):
                 return cand
     except Exception:
         pass
-    mp = os.path.join(CACHE_DIR, f"{item_key}.map")
+    mp = os.path.join(cache_dir(), f"{item_key}.map")
     try:
         h = open(mp, encoding="utf-8").read().strip()
         if h:
-            cand = os.path.normpath(os.path.join(CACHE_DIR, f"{h}.md"))
+            cand = os.path.normpath(os.path.join(cache_dir(), f"{h}.md"))
             if os.path.exists(cand):
                 return cand
     except Exception:
         pass
-    old = os.path.normpath(os.path.join(CACHE_DIR, f"{item_key}.md"))
+    old = os.path.normpath(os.path.join(cache_dir(), f"{item_key}.md"))
     return old if os.path.exists(old) else None
 
 

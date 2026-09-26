@@ -19,7 +19,12 @@ import urllib.request
 import numpy as np
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.normpath(os.path.join(_DIR, "..", "cache", "kb.sqlite"))
+
+
+def db_path():
+    """知识库 SQLite 路径（跟随页面「设置 → 本机路径」里的数据目录）。"""
+    from .config import data_path
+    return os.path.normpath(data_path("kb.sqlite"))
 
 CHUNK_CHARS = 700          # 正文块目标长度
 CHUNK_OVERLAP = 80         # 相邻块重叠（保持语义连续）
@@ -126,8 +131,9 @@ def chunk_markdown(md, title=""):
 # ---------------------------------------------------------------- 存储
 
 def _conn():
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    c = sqlite3.connect(DB_PATH)
+    db = db_path()
+    os.makedirs(os.path.dirname(db), exist_ok=True)
+    c = sqlite3.connect(db)
     c.execute("""CREATE TABLE IF NOT EXISTS chunks (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         item_key TEXT, title TEXT, section TEXT, kind TEXT,
@@ -150,14 +156,14 @@ def stats():
     by_kind = dict(c.execute("SELECT kind, COUNT(*) FROM chunks GROUP BY kind").fetchall())
     c.close()
     return {"items": n_items, "chunks": n_chunks, "by_kind": by_kind,
-            "db": DB_PATH, "model": (_cfg().get("model") if embedding_available() else None)}
+            "db": db_path(), "model": (_cfg().get("model") if embedding_available() else None)}
 
 def _cache_entries():
     """扫描 MinerU 缓存目录，返回 [(item_key, md_path)]（全在本地工作区内）。"""
     import sys
     sys.path.insert(0, os.path.normpath(os.path.join(_DIR, "..")))
-    from core.mineru import CACHE_DIR
-    CACHE_DIR = os.path.normpath(CACHE_DIR)
+    from core.mineru import cache_dir
+    CACHE_DIR = os.path.normpath(cache_dir())
     out = []
     if not os.path.isdir(CACHE_DIR):
         return out

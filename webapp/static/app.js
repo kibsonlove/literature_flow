@@ -55,6 +55,7 @@ $("settingsBtn").onclick = async () => {
       $("openalexKey").value = s.openalex_key || "";
       await loadPathsInto();
       await loadEmbeddingInto();
+      await loadMineruInto();
     } catch (e) { _settingsLoaded = false; }
   }
 };
@@ -72,6 +73,12 @@ async function loadPathsInto() {
   if (!dir && guessDir) _paintPathsHint("已自动探测到路径，点「保存」生效");
   else if (!dir) _paintPathsHint("没探测到 Zotero 数据目录，请手填或用「浏览数据目录…」");
   else _paintPathsHint("");
+  // 数据目录与高级目录：只回填"用户显式填过的值"，留空时靠 placeholder 说明默认位置
+  $("dataDir").value = d.data_dir || "";
+  $("pwBrowsersDir").value = d.playwright_browsers_dir || "";
+  $("webchatProfileDir").value = d.webchat_profile_dir || "";
+  const eff = d.effective || {};
+  _paintDataDirHint(eff.data_dir ? "当前生效：" + eff.data_dir : "");
 }
 
 async function loadEmbeddingInto() {
@@ -79,6 +86,11 @@ async function loadEmbeddingInto() {
   $("embKey").value = e.api_key || "";
   $("embBaseUrl").value = e.base_url || "";
   $("embModel").value = e.model || "";
+}
+
+async function loadMineruInto() {
+  const m = await (await fetch("/api/mineru/key")).json();
+  $("mineruKey").value = m.api_key || "";
 }
 
 $("saveSettings").onclick = async () => {
@@ -94,19 +106,28 @@ $("saveSettings").onclick = async () => {
     const p = await postJSON("/api/paths", {
       zotero_data_dir: $("zoteroDataDir").value.trim(),
       zotero_exe: $("zoteroExe").value.trim(),
+      data_dir: $("dataDir").value.trim(),
+      playwright_browsers_dir: $("pwBrowsersDir").value.trim(),
+      webchat_profile_dir: $("webchatProfileDir").value.trim(),
     });
     await postJSON("/api/embedding", {
       api_key: $("embKey").value.trim(),
       base_url: $("embBaseUrl").value.trim(),
       model: $("embModel").value.trim(),
     });
-    if (p.zotero_data_dir && !p.data_dir_ok) {
-      h.textContent = "已保存，但该目录里没找到 storage 或 zotero.sqlite —— 请核对路径";
+    await postJSON("/api/mineru/key", { api_key: $("mineruKey").value.trim() });
+
+    if (p.zotero_data_dir && !p.zotero_data_dir_ok) {
+      h.textContent = "已保存，但该目录里没找到 storage 或 zotero.sqlite —— 请核对";
     } else if (p.zotero_exe && !p.exe_ok) {
       h.textContent = "已保存，但 zotero.exe 路径不存在 —— 请核对";
+    } else if (p.data_dir && !p.data_dir_ok) {
+      h.textContent = "已保存，但数据目录有问题：" + (p.data_dir_msg || "请核对");
     } else {
       h.textContent = "已保存 ✓";
     }
+    if (p.data_dir_effective) _paintDataDirHint("当前生效：" + p.data_dir_effective);
+    await loadMineruInto();
     refreshSetupBanner();
   } catch (e) {
     h.textContent = "保存失败：" + e.message;
@@ -115,6 +136,7 @@ $("saveSettings").onclick = async () => {
 
 // ---- 本机路径：自动探测 + 系统选择框（网页拿不到完整本地路径，故由服务端弹窗代选）----
 function _paintPathsHint(t) { $("pathsHint").textContent = t || ""; }
+function _paintDataDirHint(t) { $("dataDirHint").textContent = t || ""; }
 
 $("detectPaths").onclick = async () => {
   _paintPathsHint("探测中…");
@@ -128,20 +150,24 @@ $("detectPaths").onclick = async () => {
   } catch (e) { _paintPathsHint("探测失败：" + e.message); }
 };
 
-async function pickPath(kind, inputId) {
-  _paintPathsHint("已弹出系统选择框，若没看到请检查任务栏…");
+async function pickPath(kind, inputId, hint) {
+  const paint = hint || _paintPathsHint;
+  paint("已弹出系统选择框，若没看到请检查任务栏…");
   try {
     const r = await postJSON("/api/paths/pick", { kind });
     if (r.path) {
       $(inputId).value = r.path;
-      _paintPathsHint("已选择，点「保存」生效");
+      paint("已选择，点「保存」生效");
     } else {
-      _paintPathsHint("未选择");
+      paint("未选择");
     }
-  } catch (e) { _paintPathsHint("打开选择框失败：" + e.message); }
+  } catch (e) { paint("打开选择框失败：" + e.message); }
 }
-$("pickDataDir").onclick = () => pickPath("dir", "zoteroDataDir");
+$("pickDataDir").onclick = () => pickPath("zotero_dir", "zoteroDataDir");
 $("pickExe").onclick = () => pickPath("exe", "zoteroExe");
+$("pickDataRoot").onclick = () => pickPath("data_dir", "dataDir", _paintDataDirHint);
+$("pickBrowsers").onclick = () => pickPath("browsers", "pwBrowsersDir", _paintDataDirHint);
+$("pickProfile").onclick = () => pickPath("webchat_profile", "webchatProfileDir", _paintDataDirHint);
 
 // ---- 首次运行引导：缺必填配置时给横幅，而不是等用户撞报错 ----
 async function refreshSetupBanner() {

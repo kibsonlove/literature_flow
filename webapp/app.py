@@ -379,15 +379,30 @@ def post_settings(payload: dict):
 
 @app.get("/api/paths")
 def get_paths():
-    """本机路径：当前配置 + 自动探测结果，供「设置 → 本机路径」使用。"""
+    """本机路径：配置值 + 生效值 + 自动探测结果，供「设置 → 本机路径」使用。
+
+    配置值留空表示"用默认"，界面据此显示 placeholder；effective 是实际生效的绝对路径。
+    """
     from core import zotero_detect
-    from core.config import zotero_data_dir, zotero_exe
+    from core.config import (
+        data_dir, playwright_browsers_dir, webchat_profile_dir,
+        zotero_data_dir, zotero_exe,
+    )
     cur = load_paths()
     return {
         "zotero_data_dir": (cur.get("zotero_data_dir") or "").strip(),
         "zotero_exe": (cur.get("zotero_exe") or "").strip(),
+        "data_dir": (cur.get("data_dir") or "").strip(),
+        "playwright_browsers_dir": (cur.get("playwright_browsers_dir") or "").strip(),
+        "webchat_profile_dir": (cur.get("webchat_profile_dir") or "").strip(),
+        "effective": {
+            "zotero_data_dir": zotero_data_dir(),
+            "zotero_exe": zotero_exe(),
+            "data_dir": data_dir(),
+            "playwright_browsers_dir": playwright_browsers_dir(),
+            "webchat_profile_dir": webchat_profile_dir(),
+        },
         "detected": zotero_detect.detect(),
-        "effective": {"zotero_data_dir": zotero_data_dir(), "zotero_exe": zotero_exe()},
     }
 
 
@@ -395,16 +410,41 @@ def get_paths():
 def post_paths(payload: dict):
     """保存本机路径，并回传逐项校验结果（界面据此提示哪里填错了）。"""
     from core import zotero_detect
+    from core.config import data_dir as _data_dir
+
     d = save_paths(
         zotero_data_dir=payload.get("zotero_data_dir"),
         zotero_exe=payload.get("zotero_exe"),
+        data_dir=payload.get("data_dir"),
+        playwright_browsers_dir=payload.get("playwright_browsers_dir"),
+        webchat_profile_dir=payload.get("webchat_profile_dir"),
     )
     ddir = (d.get("zotero_data_dir") or "").strip()
     exe = (d.get("zotero_exe") or "").strip()
+    data = (d.get("data_dir") or "").strip()
+
+    def _check_dir(v):
+        """留空 = 用默认（通过）；填了则必须绝对路径，并试着建出来。"""
+        if not v:
+            return True, ""
+        p = os.path.normpath(os.path.expandvars(v))
+        if not os.path.isabs(p):
+            return False, "要填绝对路径，例如 D:/litflow_data"
+        try:
+            os.makedirs(p, exist_ok=True)
+        except Exception as e:
+            return False, "目录建不出来：" + repr(e)[:80]
+        return True, ""
+
+    data_ok, data_msg = _check_dir(data)
     return {
         "zotero_data_dir": ddir,
         "zotero_exe": exe,
-        "data_dir_ok": zotero_detect.looks_like_data_dir(ddir),
+        "data_dir": data,
+        "data_dir_ok": data_ok,
+        "data_dir_msg": data_msg,
+        "data_dir_effective": _data_dir(),
+        "zotero_data_dir_ok": zotero_detect.looks_like_data_dir(ddir),
         "exe_ok": bool(exe) and os.path.isfile(exe),
     }
 
@@ -420,12 +460,49 @@ def post_paths_detect():
 def post_paths_pick(payload: dict):
     """弹系统选择框代选本机路径——浏览器拿不到完整本地路径，只能由服务端弹窗。"""
     from core import filepicker
-    if (payload.get("kind") or "dir").lower() == "exe":
+    kind = (payload.get("kind") or "zotero_dir").lower()
+    if kind == "exe":
         p = filepicker.pick_file("选择 Zotero 程序（zotero.exe）",
                                  "zotero.exe|zotero.exe|可执行文件 (*.exe)|*.exe")
+    elif kind == "data_dir":
+        p = filepicker.pick_folder("选择数据目录（缓存 / 向量库 / 浏览器内核都会放这里）")
+    elif kind == "browsers":
+        p = filepicker.pick_folder("选择浏览器内核目录（playwright 下载的 chromium）")
+    elif kind == "webchat_profile":
+        p = filepicker.pick_folder("选择网页端登录资料目录")
     else:
         p = filepicker.pick_folder("选择 Zotero 数据目录（含 storage 文件夹的那一层）")
     return {"path": p}
+
+
+# ---------------------------------------------------------------- MinerU
+
+@app.get("/api/mineru/key")
+def get_mineru_key():
+    """MinerU 平台 key：现在也能在界面里填，不必去手建 txt 文件。"""
+    from core import mineru
+    k = ""
+    try:
+        with open(mineru.key_file(), encoding="utf-8") as f:
+            k = f.read().strip()
+    except Exception:
+        pass
+    return {"api_key": k, "has_key": bool(k), "path": mineru.key_file()}
+
+
+@app.post("/api/mineru/key")
+def post_mineru_key(payload: dict):
+    """写入 config/mineru_key.txt（新位置；core/ 下的旧文件仍兼容读取）。"""
+    from core.config import CONFIG_DIR
+    k = (payload.get("api_key") or "").strip()
+    try:
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        path = os.path.join(CONFIG_DIR, "mineru_key.txt")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(k)
+    except Exception as e:
+        raise HTTPException(500, f"写入失败：{repr(e)[:120]}")
+    return {"ok": True, "has_key": bool(k), "path": path}
 
 
 # ---------------------------------------------------------------- 知识库向量模型

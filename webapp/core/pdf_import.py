@@ -14,11 +14,12 @@ import datetime
 import fitz  # PyMuPDF
 import urllib.request
 
-_LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "cache", "imports_log.json")
 DOI_RE = re.compile(r"10\.\d{4,9}/[^\s\"<>,；;]+")
 
 def _log_path():
-    return _LOG
+    """入库记录文件（跟随页面「设置 → 本机路径」里的数据目录）。"""
+    from .config import data_path
+    return os.path.normpath(data_path("imports_log.json"))
 
 def _load_log():
     try:

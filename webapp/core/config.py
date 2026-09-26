@@ -154,6 +154,47 @@ def zotero_exe():
     return v or _detect("zotero_exe")
 
 
+def data_dir():
+    """数据目录：缓存、向量库、MinerU 解析结果、浏览器内核等**可再生数据**都放这里。
+
+    默认在项目内（webapp/cache）——删掉项目目录就全清干净，不留孤儿文件。
+    想省系统盘空间或换到大容量磁盘时，可在页面「设置 → 本机路径」改到别处。
+    """
+    v = (load_paths().get("data_dir") or "").strip()
+    if v:
+        p = os.path.normpath(os.path.expandvars(v))
+        if os.path.isabs(p):
+            return p
+    return os.path.join(os.path.dirname(CONFIG_DIR), "cache")
+
+
+def data_path(*parts):
+    """数据目录下的某个文件 / 子目录。"""
+    return os.path.join(data_dir(), *parts)
+
+
+def playwright_browsers_dir():
+    """浏览器内核目录：环境变量 > 设置里的路径 > 数据目录下的默认位置。"""
+    v = (os.environ.get("PLAYWRIGHT_BROWSERS_DIR")
+         or (load_paths().get("playwright_browsers_dir") or "").strip())
+    if v:
+        p = os.path.normpath(os.path.expandvars(v))
+        if os.path.isabs(p):
+            return p
+    return os.path.normpath(data_path("playwright_browsers"))
+
+
+def webchat_profile_dir():
+    """网页端登录资料目录（存 cookie / 登录态）：优先级同上。"""
+    v = (os.environ.get("WEBCHAT_PROFILE_DIR")
+         or (load_paths().get("webchat_profile_dir") or "").strip())
+    if v:
+        p = os.path.normpath(os.path.expandvars(v))
+        if os.path.isabs(p):
+            return p
+    return os.path.normpath(data_path("webchat_profile"))
+
+
 # ---------------------------------------------------------------- 向量模型（知识库）
 
 def load_embedding():

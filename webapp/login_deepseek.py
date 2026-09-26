@@ -21,7 +21,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 from core.webchat import (  # noqa: E402
-    DEEPSEEK_URL, PROFILE_DIR, _apply_browser_path,
+    DEEPSEEK_URL, profile_dir, _apply_browser_path,
 )
 
 
@@ -30,17 +30,18 @@ def main():
 
     target = (sys.argv[1] if len(sys.argv) > 1 else DEEPSEEK_URL).strip() or DEEPSEEK_URL
     _apply_browser_path()
-    os.makedirs(PROFILE_DIR, exist_ok=True)
+    profile = profile_dir()
+    os.makedirs(profile, exist_ok=True)
 
     print("=" * 62)
     print("即将打开浏览器，请在弹出的窗口中完成登录。")
     print("目标站点：  ", target)
-    print("登录态保存到：", PROFILE_DIR)
+    print("登录态保存到：", profile)
     print("=" * 62)
 
     with sync_playwright() as p:
         ctx = p.chromium.launch_persistent_context(
-            user_data_dir=PROFILE_DIR,
+            user_data_dir=profile,
             headless=False,
             args=[
                 "--disable-blink-features=AutomationControlled",
