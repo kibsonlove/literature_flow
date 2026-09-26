@@ -24,7 +24,7 @@
 
 ## 二、准备工作
 
-- **Zotero 7** 已安装，且能正常打开（本程序通过它的**本地 API** 读写，不碰你的云端账号）
+- **Zotero** 已安装且能正常打开（本地实测 **10.0.3**，Zotero 7 及以上均可）。本程序通过它的**本地 API** 读写，不碰你的云端账号
 - **Python 3.10 或更高版本**
 - 一个 **LLM 的 API key**（DeepSeek 或任意 openai 兼容服务都行）
 - 可选：一个 **Embedding API key**，只做「语义检索」时需要。硅基流动的 `BAAI/bge-m3` 免费注册即可用
@@ -33,26 +33,37 @@
 
 ## 三、安装与启动
 
+**推荐：双击 `webapp\setup.bat`**。它会自动做完三件事，你不需要敲任何命令：
+
+1. 找到电脑上的 Python（没装的话会提示安装，能用 winget 的话可以一键装）
+2. 在 `webapp\venv` 建好独立运行环境、装齐依赖包
+3. 探测你的 Zotero 数据目录与程序位置，写进配置
+
+跑完之后**双击 `webapp\start.bat`** 启动，浏览器自动打开 `http://127.0.0.1:8000`。
+关闭程序：关掉那个黑色命令行窗口即可（不影响 Zotero）。
+
+<details>
+<summary>想手动装，或者 setup.bat 出问题时（点开看）</summary>
+
 ```bash
-# 1) 装依赖（在 webapp 目录下）
 cd webapp
 python -m venv venv
 venv\Scripts\pip install -r requirements.txt
 
-# 2) 可选：想用「网页端」模式（走网页版大模型，零 API 费用）再执行这两条
+# 可选：想用「网页端」模式（走网页版大模型，零 API 费用）再执行这两条
 venv\Scripts\playwright install chromium     # 下载浏览器内核，约 150MB
-venv\Scripts\python login_deepseek.py        # 会弹出浏览器，登录一次即可，登录态会被保存
+venv\Scripts\python login_deepseek.py        # 弹出浏览器登录一次，登录态会保存
 
-# 3) 启动（回到 webapp 目录后双击 start.bat，或直接执行下面这条）
+# 启动
 venv\Scripts\python -m uvicorn app:app --host 127.0.0.1 --port 8000
 ```
 
-启动后浏览器会自动打开 `http://127.0.0.1:8000`。关闭程序：关掉那个黑色命令行窗口即可（不影响 Zotero）。
+</details>
 
 > 另有一个 `serve.bat`，只重启服务、不弹浏览器，日志写到 `webapp/logs/server.log`，适合后台跑。
 
-> **双击后一闪而过 / 报 `No module named 'uvicorn'`**：说明第 1 步的 venv 还没建好。
-> `start.bat` 会优先用 `webapp\venv`，没有就退回到系统 `python`；把第 1 步做完即可。
+> **双击 start.bat 后一闪而过 / 报 `No module named 'uvicorn'`**：说明依赖还没装，先跑 `setup.bat`。
+> `start.bat` 会优先用 `webapp\venv`，没有就退回到系统 `python`。
 
 ---
 
@@ -69,7 +80,7 @@ venv\Scripts\python -m uvicorn app:app --host 127.0.0.1 --port 8000
 | Zotero 写入授权 | 「设置 → Zotero 写入授权」 | 点按钮授权一次（选 Always Allow） |
 | MinerU 平台 key | ⚠ 暂无界面入口：新建 `webapp/core/mineru_key.txt`，只放一行 key | 见下方说明 |
 
-**Zotero 路径不用自己找**：点「自动探测」会读 Zotero 的 profile 与注册表——数据目录自定义过、Zotero 装在非默认盘，都能找出来。探测不到时可以点「浏览数据目录…」「选择 zotero.exe…」弹系统选择框（浏览器出于安全拿不到完整本地路径，所以由本机弹窗代选），也可以手填：数据目录就是 Zotero「编辑 → 设置 → 高级 → 文件和文件夹」里显示的「数据目录位置」（如 `D:/Zotero`）。
+**Zotero 路径不用自己找**：点「自动探测」会依次查 Zotero 的 profile 配置、注册表、桌面与开始菜单的快捷方式、Windows 运行记录——数据目录自定义过、Zotero 装在非默认盘甚至盘根，都能找出来。探测不到时可以点「浏览数据目录…」「选择 zotero.exe…」弹系统选择框（浏览器出于安全拿不到完整本地路径，所以由本机弹窗代选），也可以手填：数据目录就是 Zotero「编辑 → 设置 → 高级 → 文件和文件夹」里显示的「数据目录位置」（如 `D:/Zotero`）。
 
 界面里点「保存」后立刻生效，不用重启服务。
 
@@ -133,6 +144,7 @@ venv\Scripts\python -m uvicorn app:app --host 127.0.0.1 --port 8000
 | 目录 / 文件 | 内容 | 要不要动 |
 |---|---|---|
 | `webapp/` | 主应用（FastAPI + 原生前端） | 代码别改 |
+| `webapp/setup.bat`、`start.bat` | 一键装环境 / 日常启动 | ✅ **平时只用双击这两个** |
 | `webapp/config/` | 你的密钥、Zotero 路径、学科维度模板（**不入库**） | ✅ 就动这里——或者直接在界面「设置」里改 |
 | `webapp/cache/` | 运行数据：向量库 `kb.sqlite`、MinerU 解析缓存 | 别手动改；删了会重建 |
 | `webapp/logs/` | 服务日志 | 可随时删 |
@@ -189,6 +201,7 @@ git check-ignore -v <文件路径>     # 有输出 = 已忽略；无输出 = 会
 | 浏览器提示"无法访问此网站" | 等 3～5 秒刷新；仍不行看命令行窗口的报错；重启 `start.bat`（它会自动清掉占用 8000 端口的旧进程） |
 | 页面顶部有黄色引导横幅 | 说明还缺必填配置（大模型 Key 或 Zotero 数据目录）。点「打开设置」补齐，或「稍后再说」先关掉 |
 | 页面能开，但选文献时列表是空的 | Zotero 没打开。先启动 Zotero 再重试 |
+| Zotero 升级后提示「未找到 Zotero 程序」 | Zotero 升级会把 exe 挪位置，还可能清掉注册表项。「设置 → 本机路径」点「自动探测」（会查快捷方式与运行记录）；仍不行用「选择 zotero.exe…」手动指一下 |
 | 点了「生成」但提示找不到 PDF | 「设置 → 本机路径」里的 Zotero 数据目录填错了。点「自动探测」重试，或按 Zotero「设置 → 高级 → 文件和文件夹」里显示的位置手填 |
 | 点生成后报 key 无效 / 余额不足 | 去网页「设置」里更新 API key |
 | 「语义检索」提示未配置向量模型 | 去「设置 → 知识库向量模型」填 API Key（默认用免费的硅基流动 BGE-M3） |
