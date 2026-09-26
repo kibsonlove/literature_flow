@@ -154,7 +154,6 @@ venv\Scripts\python -m uvicorn app:app --host 127.0.0.1 --port 8000
 - 脚本中**通用**的那几个：`scripts/subscribe/lit_watch.py`、`scripts/dedup/zot_dedup.py`、`scripts/tags/tag_analysis.py`、`scripts/pipeline/build_pack.py`、`scripts/debug/zot_read.py`
 - 文档：`README.md`、`docs/项目架构与开发指南.md`
 - 格式模板：`webapp/config/*.example.json`、`scripts/subscribe/*.example.txt`、`.gitignore`
-- 打包脚本：`build_exe.bat`、`build_exe.spec`
 
 ### 不会推送的（已写进 `.gitignore`，实测逐条生效）
 
@@ -167,7 +166,7 @@ venv\Scripts\python -m uvicorn app:app --host 127.0.0.1 --port 8000
 | `scripts/subscribe/lit_journals.txt`、`lit_keywords.txt` | 你的期刊名单与关键词 |
 | `scripts/pipeline/*`、`scripts/dedup/*`、`scripts/tags/*` 里的个人预设脚本与历史方案 | 含你的研究预设与本机路径 |
 | `docs/research/` | 个人研究笔记 |
-| `_trash_*/`、`_build/`、`dist/` | 临时目录与构建产物 |
+| `_trash_*/`、`dist/`、`build/` | 临时目录与构建产物 |
 
 > ⚠️ `scripts/pipeline/extract_journals.py` 里写到过 `C:\Users\<用户名>\Desktop\毕业论文\…` 这类本机路径，
 > 全靠 `scripts/pipeline/*` 这条规则挡着——**不要放开它**。

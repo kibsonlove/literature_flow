@@ -30,7 +30,7 @@ notes/*
 !notes/.gitkeep
 reports/*
 !reports/.gitkeep
-_build/
+# 通用构建产物目录（本项目当前不打包分发，保留以防哪天工具生成后被误提交）
 dist/
 build/
 
