@@ -28,7 +28,7 @@ _APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # webapp
 TOPICS_DIR = os.path.join(_APP_DIR, "config", "topics")
 
 OA_BASE = "https://api.openalex.org"
-ARXIV_BASE = "http://export.arxiv.org/api/query"
+ARXIV_BASE = "https://export.arxiv.org/api/query"
 UA = "literature-flow/1.0 (mailto:litflow@example.com)"
 _NS = {"a": "http://www.w3.org/2005/Atom", "arxiv": "http://arxiv.org/schemas/atom"}
 
