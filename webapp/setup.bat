@@ -57,9 +57,25 @@ if /i "%ANS%"=="Y" goto winget_install
 goto give_up
 
 :winget_install
-winget install --id Python.Python.3.12 -e
+echo       Installing Python 3.12 via winget, this takes a few minutes...
+winget install --id Python.Python.3.12 -e --accept-source-agreements --accept-package-agreements
 echo.
-echo  When the installer is finished, close this window and run setup.bat again.
+REM The current window's PATH is not refreshed after installing, so call the
+REM freshly installed interpreter by absolute path and continue setup.
+set "NEWPY="
+if exist "%LOCALAPPDATA%\Programs\Python\Python313\python.exe" set "NEWPY=%LOCALAPPDATA%\Programs\Python\Python313\python.exe"
+if not defined NEWPY if exist "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" set "NEWPY=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
+if not defined NEWPY if exist "%LOCALAPPDATA%\Programs\Python\Python311\python.exe" set "NEWPY=%LOCALAPPDATA%\Programs\Python\Python311\python.exe"
+if not defined NEWPY if exist "%LOCALAPPDATA%\Programs\Python\Python310\python.exe" set "NEWPY=%LOCALAPPDATA%\Programs\Python\Python310\python.exe"
+if not defined NEWPY goto winget_reopen
+set "PYEXE=%NEWPY%"
+echo       Python is ready:
+"%PYEXE%" --version
+goto have_python
+
+:winget_reopen
+echo  Python was installed, but not where this script can call it directly.
+echo  Close this window and run setup.bat again - it will pick it up.
 goto give_up
 
 :manual_download
