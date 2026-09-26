@@ -38,3 +38,7 @@ build/
 # 本机专用启动器：硬编码本机 Python 绝对路径，不随仓库分发。
 # 通用入口仍是 webapp/start.bat（优先找 webapp/venv，找不到才回退 python）。
 *.local.bat
+
+# Python 虚拟环境：setup.bat 会在 webapp/ 下创建 venv（几百 MB，绝不能入库）
+venv/
+.venv/
