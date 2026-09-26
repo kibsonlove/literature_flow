@@ -26,28 +26,49 @@ if exist "venv\Scripts\python.exe" (
 )
 
 where python >nul 2>&1
-if %errorlevel%==0 goto use_python
+if %errorlevel%==0 goto try_python
 where py >nul 2>&1
-if %errorlevel%==0 goto use_py
+if %errorlevel%==0 goto try_py
 goto no_python
 
-:use_python
-set "PYEXE=python"
+:try_python
+REM Resolve to an absolute path and check the version: this project needs 3.10+,
+REM an older interpreter would fail later during "pip install" with a cryptic error.
+set "CAND="
+for /f "delims=" %%P in ('python -c "import sys;sys.stdout.write(sys.executable)" 2^>nul') do set "CAND=%%P"
+if not defined CAND goto try_py
+"%CAND%" -c "import sys;raise SystemExit(0 if sys.version_info>=(3,10) else 1)" >nul 2>&1
+if errorlevel 1 goto python_too_old
+set "PYEXE=%CAND%"
 echo       using the system Python:
-python --version
+"%PYEXE%" --version
 goto have_python
 
-:use_py
-set "PYEXE=py"
+:python_too_old
+echo       the Python on PATH is too old for this project (needs 3.10+):
+"%CAND%" --version
+goto try_py
+
+:try_py
+set "CAND2="
+where py >nul 2>&1
+if not %errorlevel%==0 goto no_python
+for /f "delims=" %%P in ('py -3 -c "import sys;sys.stdout.write(sys.executable)" 2^>nul') do set "CAND2=%%P"
+if not defined CAND2 goto no_python
+"%CAND2%" -c "import sys;raise SystemExit(0 if sys.version_info>=(3,10) else 1)" >nul 2>&1
+if errorlevel 1 goto no_python
+set "PYEXE=%CAND2%"
 echo       using the Python launcher:
-py --version
+"%PYEXE%" --version
 goto have_python
 
 :no_python
-echo       Python was NOT found on this computer.
+echo       No suitable Python found (this project needs 3.10 or newer).
 echo.
-echo  Please install Python 3.10 or newer, then run this file again.
-echo  During installation, remember to tick "Add Python to PATH".
+echo  If you already have Python installed, it is either too old, or it was
+echo  installed without ticking "Add Python to PATH".
+echo  Install or upgrade to Python 3.10+ (tick that checkbox!), then run this
+echo  file again.
 echo.
 where winget >nul 2>&1
 if not %errorlevel%==0 goto manual_download
