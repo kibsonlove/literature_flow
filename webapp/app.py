@@ -210,6 +210,39 @@ def get_longdoc_status():
             "result": _LONGDOC_STATE["result"]}
 
 
+# ---------------------------------------------------------------- MinerU
+# ⚠ /api/mineru/key 必须定义在 /api/mineru/{item_key} 之前：
+# Starlette 是按定义顺序匹配路由的，固定路径写在动态路径后面会被抢先命中，
+# "key" 被当作 item_key 去查缓存，直接 404。
+
+@app.get("/api/mineru/key")
+def get_mineru_key():
+    """MinerU 平台 key：现在也能在界面里填，不必去手建 txt 文件。"""
+    from core import mineru
+    k = ""
+    try:
+        with open(mineru.key_file(), encoding="utf-8") as f:
+            k = f.read().strip()
+    except Exception:
+        pass
+    return {"api_key": k, "has_key": bool(k), "path": mineru.key_file()}
+
+
+@app.post("/api/mineru/key")
+def post_mineru_key(payload: dict):
+    """写入 config/mineru_key.txt（新位置；core/ 下的旧文件仍兼容读取）。"""
+    from core.config import CONFIG_DIR
+    k = (payload.get("api_key") or "").strip()
+    try:
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        path = os.path.join(CONFIG_DIR, "mineru_key.txt")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(k)
+    except Exception as e:
+        raise HTTPException(500, f"写入失败：{repr(e)[:120]}")
+    return {"ok": True, "has_key": bool(k), "path": path}
+
+
 @app.post("/api/mineru/snapshot_all")
 def post_snapshot_all():
     """为所有已有 MinerU 缓存的文献补建/更新 Zotero 子笔记快照。"""
@@ -473,36 +506,6 @@ def post_paths_pick(payload: dict):
     else:
         p = filepicker.pick_folder("选择 Zotero 数据目录（含 storage 文件夹的那一层）")
     return {"path": p}
-
-
-# ---------------------------------------------------------------- MinerU
-
-@app.get("/api/mineru/key")
-def get_mineru_key():
-    """MinerU 平台 key：现在也能在界面里填，不必去手建 txt 文件。"""
-    from core import mineru
-    k = ""
-    try:
-        with open(mineru.key_file(), encoding="utf-8") as f:
-            k = f.read().strip()
-    except Exception:
-        pass
-    return {"api_key": k, "has_key": bool(k), "path": mineru.key_file()}
-
-
-@app.post("/api/mineru/key")
-def post_mineru_key(payload: dict):
-    """写入 config/mineru_key.txt（新位置；core/ 下的旧文件仍兼容读取）。"""
-    from core.config import CONFIG_DIR
-    k = (payload.get("api_key") or "").strip()
-    try:
-        os.makedirs(CONFIG_DIR, exist_ok=True)
-        path = os.path.join(CONFIG_DIR, "mineru_key.txt")
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(k)
-    except Exception as e:
-        raise HTTPException(500, f"写入失败：{repr(e)[:120]}")
-    return {"ok": True, "has_key": bool(k), "path": path}
 
 
 # ---------------------------------------------------------------- 浏览器内核（网页端模式用）
