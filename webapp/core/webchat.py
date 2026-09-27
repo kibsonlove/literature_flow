@@ -691,8 +691,8 @@ def _verify_attachment(page, pdf_path, n_before=None, say=lambda m: None):
 class WebChatSession:
     """复用同一个浏览器上下文处理多篇（避免反复启停导致登录态丢失 / 被风控）。
 
-    用法：
-        s = WebChatSession(headless=True, log=print)
+    用法（批量笔记实际传 headless=False，好让用户能现场登录）：
+        s = WebChatSession(headless=False, log=print)
         s.open()                       # 启动 + 登录检查（一次）
         html = s.ask(pdf_path, prompt, timeout=1800, stop_check=...)   # 可多次
         s.close()

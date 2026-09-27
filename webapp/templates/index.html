@@ -35,7 +35,7 @@
   <div id="settingsPanel" class="panel hidden">
     <h2>设置（仅存本机）</h2>
     <label>API Key
-      <input id="apiKey" type="text" placeholder="sk-..." autocomplete="off">
+      <input id="apiKey" type="text" placeholder="sk-...（不填则只用网页端）" autocomplete="off">
     </label>
     <label>模型
       <input id="model" type="text" placeholder="deepseek-chat">
@@ -154,18 +154,18 @@
         <input id="pdfFile" type="file" accept="application/pdf" hidden>
       </label>
       <button id="pickZoteroBtn" class="ghost">从 Zotero 选择</button>
-      <button id="genBtn" class="primary">生成六维笔记</button>
+      <button id="genBtn" class="primary">生成笔记</button>
       <button id="longdocBtn" class="ghost">长文精读（论文/专著）</button>
     </div>
     <div class="row backend-row">
       <span class="muted">后端：</span>
       <label class="radio"><input type="radio" name="backend" value="api"> DeepSeek API（按量计费）</label>
-      <label class="radio"><input type="radio" name="backend" value="webchat" checked> 网页端 WebChat（默认，零费用，需先登录）</label>
+      <label class="radio"><input type="radio" name="backend" value="webchat" checked> 网页端 WebChat（默认，零费用）</label>
     </div>
     <div id="webchatRow" class="row hidden">
       <span class="muted">网页端地址：</span>
       <input id="webchatUrl" type="text" value="https://chat.deepseek.com" placeholder="https://chat.deepseek.com">
-      <span class="muted">首次需在 webapp 目录运行 python login_deepseek.py 登录一次</span>
+      <span class="muted">首次精读时会弹出浏览器让你登录一次，登录态会保存，之后免登录</span>
     </div>
     <div id="genStatus" class="status"></div>
   </section>
@@ -213,7 +213,7 @@
   <div id="batchPanel" class="overlay hidden">
     <div class="modal modal-wide">
       <div class="modal-head">
-        <h2>批量六维笔记</h2>
+        <h2>批量生成笔记</h2>
         <button id="batchClose" class="ghost">✕</button>
       </div>
       <div class="row">

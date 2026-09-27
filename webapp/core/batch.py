@@ -252,7 +252,7 @@ def _run(keys, opts):
                 continue
 
             if k in noted:
-                _log(f"[{i}/{len(keys)}] 已有六维笔记，跳过：{title[:36]}")
+                _log(f"[{i}/{len(keys)}] 已有笔记，跳过：{title[:36]}")
                 with _LOCK:
                     _STATE["results"].append({"key": k, "title": title, "status": "already_noted"})
                     _STATE["done"] += 1

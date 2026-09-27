@@ -409,7 +409,7 @@ function renderZoteroList(items, onPick) {
       $("noteEditor").value = "";
       $("noteTitle").textContent = "";
       if ($("writeStatus")) $("writeStatus").textContent = "";
-      $("genStatus").textContent = `已选「${it.title}」，点「生成六维笔记」开始。`;
+      $("genStatus").textContent = `已选「${it.title}」，点「生成笔记」开始。`;
     };
     ul.appendChild(li);
   });
@@ -421,7 +421,7 @@ $("pdfFile").addEventListener("change", () => {
   $("result").classList.add("hidden");
   if (f) {
     $("genStatus").innerHTML =
-      `已选择 <b>${f.name}</b>（${(f.size / 1024).toFixed(0)} KB）——点「生成六维笔记」：<br>` +
+      `已选择 <b>${f.name}</b>（${(f.size / 1024).toFixed(0)} KB）——点「生成笔记」：<br>` +
       `<span class="muted">自动存入 Zotero（建条目+挂附件）→ 表格解析（首次约 1-3 分钟）→ 生成笔记 → 确认回写。</span>`;
   } else {
     $("genStatus").textContent = "";
@@ -549,7 +549,7 @@ async function loadPaperset() {
     PS_ROWS = await (await fetch("/api/paperset")).json();
     if (!Array.isArray(PS_ROWS)) PS_ROWS = [];
     const ok = PS_ROWS.filter((r) => r.parsed).length;
-    $("psStatus").textContent = `共 ${PS_ROWS.length} 篇（已解析六维 ${ok} 篇）`;
+    $("psStatus").textContent = `共 ${PS_ROWS.length} 篇（已解析维度 ${ok} 篇）`;
     renderPaperset();
   } catch (e) {
     $("psStatus").textContent = "读取失败：" + e.message;
@@ -664,7 +664,7 @@ async function startBatch() {
     $("batchProg").textContent = "请先点「读取候选」";
     return;
   }
-  if (!confirm(`将对 ${BATCH_KEYS.length} 篇批量生成六维笔记（网页端、逐篇、耗时较长）。继续？`)) return;
+  if (!confirm(`将对 ${BATCH_KEYS.length} 篇批量生成笔记（网页端、逐篇、耗时较长）。继续？`)) return;
   try {
     await postJSON("/api/batch/start", {
       keys: BATCH_KEYS,

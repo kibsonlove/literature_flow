@@ -616,7 +616,7 @@ def setup_status():
 
     items = [
         _item("llm_key", "大模型 API Key", s["has_key"], "设置 → 大模型",
-              "不填无法生成笔记", required=True),
+              "用 API 后端才必需；走网页端（默认）可留空"),
         _item("zotero_data_dir", "Zotero 数据目录",
               zotero_detect.looks_like_data_dir(ddir), "设置 → 本机路径",
               "填错会读不到 PDF", required=True, value=ddir),
