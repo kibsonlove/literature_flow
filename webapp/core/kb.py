@@ -152,10 +152,14 @@ def _conn():
 def stats():
     c = _conn()
     n_chunks = c.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
-    n_items = c.execute("SELECT COUNT(*) FROM indexed").fetchone()[0]
+    indexed = {r[0] for r in c.execute("SELECT item_key FROM indexed").fetchall()}
     by_kind = dict(c.execute("SELECT kind, COUNT(*) FROM chunks GROUP BY kind").fetchall())
     c.close()
-    return {"items": n_items, "chunks": n_chunks, "by_kind": by_kind,
+    # 「已解析但未入库」：MinerU 有缓存、却没进向量库的条目数。
+    # 解析与入库是两步，很容易被误认为"精读完就能检索"——界面用这个数字提示去点「更新索引」。
+    cached = {k for k, _ in _cache_entries()}
+    return {"items": len(indexed), "chunks": n_chunks, "by_kind": by_kind,
+            "cached": len(cached), "pending": len(cached - indexed),
             "db": db_path(), "model": (_cfg().get("model") if embedding_available() else None)}
 
 def _cache_entries():

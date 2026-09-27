@@ -914,7 +914,11 @@ $("kbClose").onclick = () => $("kbPanel").classList.add("hidden");
 async function loadKbStats() {
   try {
     const st = await (await fetch("/api/kb/stats")).json();
-    $("kbStats").textContent = `已索引 ${st.items} 篇 / ${st.chunks} 块（表格 ${(st.by_kind || {}).table || 0} 块）· 模型 ${st.model || "未配置"}`;
+    let line = `已入库 ${st.items} 篇 / ${st.chunks} 块（表格 ${(st.by_kind || {}).table || 0} 块）· 模型 ${st.model || "未配置"}`;
+    if (st.pending > 0) {
+      line += `　⚠ 另有 ${st.pending} 篇已用 MinerU 解析、但还没入库 —— 点「更新索引」补齐后才能被检索到`;
+    }
+    $("kbStats").textContent = line;
   } catch (e) { $("kbStats").textContent = "统计失败：" + e.message; }
 }
 
