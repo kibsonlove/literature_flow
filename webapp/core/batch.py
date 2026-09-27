@@ -230,10 +230,14 @@ def _run(keys, opts):
         return
 
     for i, k in enumerate(keys, 1):
+        # ⚠ 必须先出锁再调 _log：_log 内部会再次 _LOCK.acquire()，
+        # 而 threading.Lock 不可重入 —— 在锁内调用会永久死锁，
+        # 导致 /api/batch/status 与 /api/batch/stop 一起挂死（实测 HTTP 000）。
         with _LOCK:
-            if _STATE["stop"]:
-                _log("收到停止指令，中断。")
-                break
+            stopped = _STATE["stop"]
+        if stopped:
+            _log("收到停止指令，中断。")
+            break
         title = k
         try:
             it = z.item(k)
