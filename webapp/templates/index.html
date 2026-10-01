@@ -6,498 +6,646 @@
   <title>literature_flow</title>
   <link rel="stylesheet" href="/static/style.css">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <!-- 图标统一 Lucide（全局设计标准 H1）；CDN 不可达时按钮仍有文字标签，不阻塞使用 -->
+  <script src="https://cdn.jsdelivr.net/npm/lucide@0.460.0/dist/umd/lucide.min.js"></script>
 </head>
 <body>
-  <header class="topbar">
-    <h1 id="appTitle">literature_flow</h1>
-    <div class="topbar-actions">
-      <button id="pdfimpBtn" class="ghost">PDF 入库</button>
-      <button id="batchBtn" class="ghost">批量笔记</button>
-      <button id="papersetBtn" class="ghost">论文对比</button>
-      <button id="kbBtn" class="ghost">语义检索</button>
-      <button id="litBtn" class="ghost">文献检索</button>
-      <button id="toolsBtn" class="ghost">工具箱</button>
-      <button id="settingsBtn" class="ghost">设置</button>
+<div class="app">
+  <!-- ================= 侧边导航 ================= -->
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"><i data-lucide="library-big"></i></span>
+      <span class="brand-text">
+        <h1 id="appTitle">literature_flow</h1>
+        <small>文献流水线</small>
+      </span>
     </div>
-  </header>
 
-  <!-- 首次运行引导：缺配置时显示，不阻塞使用 -->
-  <div id="setupBanner" class="setup-banner hidden">
-    <div class="sb-title">还差几步就能用了</div>
-    <ul id="setupList"></ul>
-    <div class="row">
-      <button id="setupOpenBtn">打开设置</button>
-      <button id="setupLaterBtn" class="ghost">稍后再说</button>
+    <nav class="nav" aria-label="主导航">
+      <div class="nav-group-title">工作台</div>
+      <button class="nav-item is-active" data-view="agent" type="button">
+        <i data-lucide="sparkles" aria-hidden="true"></i><span>智能体</span>
+      </button>
+      <button class="nav-item" data-view="single" type="button">
+        <i data-lucide="file-text" aria-hidden="true"></i><span>单篇精读</span>
+      </button>
+
+      <div class="nav-group-title">能力</div>
+      <button id="litBtn" class="nav-item" type="button">
+        <i data-lucide="search" aria-hidden="true"></i><span>文献检索</span>
+      </button>
+      <button id="kbBtn" class="nav-item" type="button">
+        <i data-lucide="library" aria-hidden="true"></i><span>语义检索</span>
+      </button>
+      <button id="batchBtn" class="nav-item" type="button">
+        <i data-lucide="layers" aria-hidden="true"></i><span>批量笔记</span>
+      </button>
+      <button id="longdocBtn" class="nav-item" type="button">
+        <i data-lucide="book-open-text" aria-hidden="true"></i><span>长文精读</span>
+      </button>
+      <button id="pdfimpBtn" class="nav-item" type="button">
+        <i data-lucide="file-up" aria-hidden="true"></i><span>PDF 入库</span>
+      </button>
+      <button id="papersetBtn" class="nav-item" type="button">
+        <i data-lucide="table-2" aria-hidden="true"></i><span>论文对比</span>
+      </button>
+      <button id="toolsBtn" class="nav-item" type="button">
+        <i data-lucide="wrench" aria-hidden="true"></i><span>工具箱</span>
+      </button>
+    </nav>
+
+    <div class="sidebar-foot">
+      <div class="brain" role="group" aria-label="大模型通道">
+        <div class="brain-head">
+          <span class="brain-title">大脑</span>
+          <span id="brainHint" class="muted">网页端 · 零费用</span>
+        </div>
+        <div class="seg" id="brainSeg">
+          <button class="seg-btn is-on" data-brain="webchat" type="button">
+            <i data-lucide="globe" aria-hidden="true"></i>网页端
+          </button>
+          <button class="seg-btn" data-brain="api" type="button">
+            <i data-lucide="plug" aria-hidden="true"></i>API
+          </button>
+        </div>
+      </div>
+      <div class="foot-row">
+        <span id="zoteroState" class="zotero-state is-unknown">
+          <i data-lucide="circle-dashed" aria-hidden="true"></i><span>检测中…</span>
+        </span>
+        <button id="settingsBtn" class="ghost btn-sm" type="button">
+          <i data-lucide="settings" aria-hidden="true"></i>设置
+        </button>
+      </div>
     </div>
+  </aside>
+
+  <!-- ================= 工作区 ================= -->
+  <main class="stage">
+    <!-- 首次运行引导：缺配置时显示，不阻塞使用 -->
+    <div id="setupBanner" class="setup-banner hidden">
+      <div class="sb-title">还差几步就能用了</div>
+      <ul id="setupList"></ul>
+      <div class="row">
+        <button id="setupOpenBtn" type="button">打开设置</button>
+        <button id="setupLaterBtn" class="ghost" type="button">稍后再说</button>
+      </div>
+    </div>
+
+    <!-- ---------- 视图 1：智能体指挥台 ---------- -->
+    <section id="viewAgent" class="view">
+      <header class="view-head">
+        <div class="view-head-main">
+          <h2>智能体</h2>
+          <p class="view-sub">
+            用一句自然语言下指令：它会先列出一份计划，再逐步执行。
+            <b>凡是会改动 Zotero 的步骤都会停下来等你确认</b>，不会静默写库。
+            任务<b>串行</b>执行（同一浏览器通道），一次只跑一个；批量精读一次任务最多安排一个。
+          </p>
+        </div>
+        <div class="view-head-actions">
+          <button id="agentHistoryBtn" class="ghost btn-sm" type="button">
+            <i data-lucide="history" aria-hidden="true"></i>历史任务
+          </button>
+          <button id="agentCapBtn" class="ghost btn-sm" type="button">
+            <i data-lucide="blocks" aria-hidden="true"></i>可用工具
+            <span id="agentToolCount" class="chip-count">—</span>
+          </button>
+        </div>
+      </header>
+
+      <form id="agentForm" class="compose" autocomplete="off">
+        <label class="sr-only" for="agentTask">任务描述</label>
+        <textarea id="agentTask" rows="3" spellcheck="false"
+          placeholder="例如：找一些「可解释人工智能 × 数据可视化」2023 年以来的新论文，挑相关的存进 Zotero 的 XAI 分类"></textarea>
+        <div class="compose-actions">
+          <button id="agentPlanBtn" class="primary" type="submit">
+            <i data-lucide="wand-sparkles" aria-hidden="true"></i>生成计划
+          </button>
+          <button id="agentRunBtn" class="ghost hidden" type="button">
+            <i data-lucide="play" aria-hidden="true"></i>开始执行
+          </button>
+          <button id="agentAbortBtn" class="ghost hidden" type="button">
+            <i data-lucide="square" aria-hidden="true"></i>中止
+          </button>
+          <span id="agentHint" class="agent-hint" role="status"></span>
+        </div>
+      </form>
+
+      <div id="agentExamples" class="examples">
+        <div class="examples-title">可以这样使唤它（点一下填进输入框）：</div>
+        <div class="examples-row">
+          <button type="button" class="example" data-example="找一些和我的研究课题相关的近期论文，按被引次数排序给我看，先不要入库（只读任务）">按课题检索一批近期论文（只读）</button>
+          <button type="button" class="example" data-example="在知识库里查一查有没有讲过某个现象，把出处列出来">在文献全文里找证据</button>
+          <button type="button" class="example" data-example="列出含 PDF 但还没有笔记的文献，告诉我有哪些">看还有哪些文献没精读</button>
+          <button type="button" class="example" data-example="扫描重复条目并给出预览，不要真的删（先 dry-run）">预览重复条目（不改动）</button>
+        </div>
+      </div>
+
+      <div id="agentPlanCard" class="plan-card hidden" aria-live="polite"></div>
+
+      <div id="agentLogWrap" class="log-wrap hidden">
+        <div class="log-head">
+          <span class="log-title">执行日志</span>
+          <span id="agentElapsed" class="muted"></span>
+        </div>
+        <div id="agentLog" class="agent-log"></div>
+      </div>
+
+      <div id="agentSummary" class="agent-summary hidden"></div>
+
+      <div id="agentHistory" class="history hidden"></div>
+      <div id="agentCapList" class="cap-list hidden"></div>
+    </section>
+
+    <!-- ---------- 视图 2：单篇精读 ---------- -->
+    <section id="viewSingle" class="view hidden">
+      <header class="view-head">
+        <div class="view-head-main">
+          <h2>单篇精读</h2>
+          <p class="view-sub">
+            上传 PDF，或点「从 Zotero 选择」挑一篇 → 自动存入 Zotero（建条目 + 挂附件 + 表格解析）→ 生成笔记 → 确认回写。
+            要一次跑多篇，用侧栏「批量笔记」。
+          </p>
+        </div>
+      </header>
+
+      <section class="input-zone">
+        <div class="row">
+          <input id="zoteroKey" type="text" readonly placeholder="未选择条目——点右侧「从 Zotero 选择」" title="由选择器填充；双击可清空重选">
+          <label class="filebtn">上传 PDF
+            <input id="pdfFile" type="file" accept="application/pdf" hidden>
+          </label>
+          <button id="pickZoteroBtn" class="ghost" type="button">从 Zotero 选择</button>
+          <button id="genBtn" class="primary" type="button">生成笔记</button>
+        </div>
+        <div class="row backend-row">
+          <span class="muted">本流程后端：</span>
+          <label class="radio"><input type="radio" name="backend" value="api"> DeepSeek API（按量计费）</label>
+          <label class="radio"><input type="radio" name="backend" value="webchat" checked> 网页端 WebChat（默认，零费用）</label>
+          <span class="muted">跟随侧栏「大脑」开关</span>
+        </div>
+        <div id="webchatRow" class="row hidden">
+          <span class="muted">网页端地址：</span>
+          <input id="webchatUrl" type="text" value="https://chat.deepseek.com" placeholder="https://chat.deepseek.com">
+          <span class="muted">首次精读时会弹出浏览器让你登录一次，登录态会保存，之后免登录</span>
+        </div>
+        <div id="genStatus" class="status"></div>
+      </section>
+
+      <section id="result" class="hidden">
+        <div id="targetCard" class="target-card"></div>
+        <div class="row">
+          <span id="noteTitle"></span>
+          <span id="notePages" class="muted"></span>
+        </div>
+        <textarea id="noteEditor" spellcheck="false"></textarea>
+        <div class="row">
+          <input id="tagsInput" type="text" placeholder="标签，空格分隔，如 #关键词一 #关键词二">
+          <button id="writeBtn" class="primary" type="button">确认回写 Zotero</button>
+        </div>
+        <div id="writeStatus" class="status"></div>
+        <div id="preview" class="preview"></div>
+      </section>
+    </section>
+  </main>
+</div>
+
+<!-- ================= 设置抽屉 ================= -->
+<div id="settingsPanel" class="overlay hidden">
+  <div class="modal modal-wide settings-modal">
+    <div class="modal-head">
+      <h2>设置（仅存本机）</h2>
+      <button id="settingsClose" class="ghost" type="button">关闭</button>
+    </div>
+    <div class="settings-body">
+  <label>API Key
+    <input id="apiKey" type="text" placeholder="sk-...（不填则只用网页端）" autocomplete="off">
+  </label>
+  <label>模型
+    <input id="model" type="text" placeholder="deepseek-chat">
+  </label>
+  <label>Base URL
+    <input id="baseUrl" type="text" placeholder="https://api.deepseek.com">
+  </label>
+  <hr>
+  <div class="small" style="color:#555;margin-bottom:.2em">本机路径（Zotero）</div>
+  <label>Zotero 数据目录
+    <input id="zoteroDataDir" type="text" placeholder="含 storage 文件夹的那一层，如 C:/Users/你/Zotero">
+  </label>
+  <div class="small muted" style="margin-bottom:.4em">
+    填错会读不到 PDF。不知道在哪：Zotero 里「编辑 → 设置 → 高级 → 文件和文件夹」可看到数据目录位置。
   </div>
-
-  <!-- 设置抽屉 -->
-  <div id="settingsPanel" class="panel hidden">
-    <h2>设置（仅存本机）</h2>
-    <label>API Key
-      <input id="apiKey" type="text" placeholder="sk-...（不填则只用网页端）" autocomplete="off">
+  <div class="row">
+    <button id="detectPaths" class="ghost">自动探测</button>
+    <button id="pickDataDir" class="ghost">浏览数据目录…</button>
+    <button id="pickExe" class="ghost">选择 zotero.exe…</button>
+    <span id="pathsHint" class="small muted"></span>
+  </div>
+  <label>Zotero 程序路径（可留空）
+    <input id="zoteroExe" type="text" placeholder="C:/Program Files/Zotero/zotero.exe">
+  </label>
+  <hr>
+  <div class="small" style="color:#555;margin-bottom:.2em">数据目录</div>
+  <label>数据目录（缓存 / 向量库 / 浏览器内核）
+    <input id="dataDir" type="text" placeholder="留空 = 放在项目内 webapp\cache">
+  </label>
+  <div class="row">
+    <button id="pickDataRoot" class="ghost">浏览…</button>
+    <span id="dataDirHint" class="small muted"></span>
+  </div>
+  <div class="small muted" style="margin-bottom:.6em">
+    这些数据都是可再生的（删了会重建）。默认放在项目目录里——删掉项目文件夹就能全部清理干净；
+    想省系统盘空间，可以改到大容量磁盘。
+  </div>
+  <details style="margin-bottom:.6em">
+    <summary class="small" style="cursor:pointer;color:#555">高级：浏览器内核 / 网页端登录资料目录</summary>
+    <label style="margin-top:.6em">浏览器内核目录（可留空）
+      <input id="pwBrowsersDir" type="text" placeholder="留空 = 数据目录下的 playwright_browsers">
     </label>
-    <label>模型
-      <input id="model" type="text" placeholder="deepseek-chat">
-    </label>
-    <label>Base URL
-      <input id="baseUrl" type="text" placeholder="https://api.deepseek.com">
-    </label>
-    <hr>
-    <div class="small" style="color:#555;margin-bottom:.2em">本机路径（Zotero）</div>
-    <label>Zotero 数据目录
-      <input id="zoteroDataDir" type="text" placeholder="含 storage 文件夹的那一层，如 C:/Users/你/Zotero">
+    <div class="row">
+      <button id="pickBrowsers" class="ghost">浏览…</button>
+      <button id="installChromium" class="ghost">一键下载内核（约 150MB）</button>
+      <span id="pwHint" class="small muted"></span>
+    </div>
+    <div class="small muted" style="margin-bottom:.4em">
+      用「网页端」模式（走网页版大模型、零 API 费用）时需要一个真实浏览器内核。
+      点上面的按钮会自动下载到此处配置的目录，装完即可用，不用手填路径。
+    </div>
+    <pre id="pwLog" class="pw-log hidden"></pre>
+    <label>网页端登录资料目录（可留空）
+      <input id="webchatProfileDir" type="text" placeholder="留空 = 数据目录下的 webchat_profile">
     </label>
     <div class="small muted" style="margin-bottom:.4em">
-      填错会读不到 PDF。不知道在哪：Zotero 里「编辑 → 设置 → 高级 → 文件和文件夹」可看到数据目录位置。
+      这里存的是你在网页版大模型站点登录后的状态（cookie 等），留着就不用每次重新登录；
+      删掉只会让你下次重新登录一次，没有别的影响。
     </div>
     <div class="row">
-      <button id="detectPaths" class="ghost">自动探测</button>
-      <button id="pickDataDir" class="ghost">浏览数据目录…</button>
-      <button id="pickExe" class="ghost">选择 zotero.exe…</button>
-      <span id="pathsHint" class="small muted"></span>
+      <button id="pickProfile" class="ghost">浏览登录资料目录…</button>
     </div>
-    <label>Zotero 程序路径（可留空）
-      <input id="zoteroExe" type="text" placeholder="C:/Program Files/Zotero/zotero.exe">
+  </details>
+  <hr>
+  <div class="small" style="color:#555;margin-bottom:.2em">知识库向量模型（语义检索用，可留空）</div>
+  <label>Embedding API Key
+    <input id="embKey" type="text" placeholder="留空则「语义检索」不可用" autocomplete="off">
+  </label>
+  <label>Embedding Base URL
+    <input id="embBaseUrl" type="text" placeholder="https://api.siliconflow.cn/v1">
+  </label>
+  <label>Embedding 模型
+    <input id="embModel" type="text" placeholder="BAAI/bge-m3">
+  </label>
+  <div class="small muted" style="margin-bottom:.6em">
+    默认用硅基流动的 BAAI/bge-m3（1024 维、免费）：
+    <a href="https://cloud.siliconflow.cn/account/ak" target="_blank" rel="noopener">注册领取 Key</a>。
+  </div>
+  <label>MinerU API Key（长文精读 / 语义检索用，可留空）
+    <input id="mineruKey" type="text" placeholder="留空则拿不到原文表格里的数据；mineru.net 注册即得" autocomplete="off">
+  </label>
+  <div class="small muted" style="margin-bottom:.6em">
+    不填也能正常精读单篇文献，只是会降级成纯文本处理。以前要手建 core/mineru_key.txt，
+    现在在这里填就行（会写到 config/mineru_key.txt）。
+  </div>
+  <hr>
+  <label>OpenAlex API Key（文献检索用，可留空）
+    <input id="openalexKey" type="text" placeholder="留空则用匿名额度：每天约 20 轮检索" autocomplete="off">
+  </label>
+  <div class="small muted" style="margin-bottom:.6em">
+    免费注册约 30 秒：<a href="https://openalex.org/settings/api" target="_blank" rel="noopener">openalex.org/settings/api</a>
+    登录后复制页面上的 key 粘贴到上面。额度从每天 $0.1 提到 $1（10 倍），还能查看用量。
+  </div>
+  <hr>
+  <label>研究课题 / 研究问题（精读笔记里「与我课题的相关性」拿它对照）
+    <textarea id="researchQuestion" rows="3" placeholder="每行一条，可写多条研究问题"></textarea>
+  </label>
+  <div class="small muted" style="margin-bottom:.6em">
+    填写后，每篇精读笔记会<b>逐条对照</b>你的课题，写明「支撑 / 反驳 / 可借用方法或材料 / 仅背景相关」，
+    并给出「高 / 中 / 低」评级。留空则该节只写占位说明，<b>不会让模型凭空猜测相关性</b>。
+    只对之后新生成的笔记生效（已生成的笔记不会被动改动）。<br>
+    智能体在出计划时也会读到这里，用来理解你的任务背景。
+  </div>
+  <hr>
+  <details>
+    <summary class="small" style="color:#555">网页端精读：挂载与卡住检测（高级，秒）</summary>
+    <div class="small muted" style="margin:.4em 0 .6em">
+      批量笔记时，若 PDF 没能挂到网页端、或网页端长时间毫无反应，会自动<b>跳过当前文件</b>继续下一篇，
+      不再干等到超时。留空即用默认值，一般不用改。
+    </div>
+    <label>卡住判据：内容停止增长满多少秒
+      <input id="pdfIdleTimeout" type="text" placeholder="240" autocomplete="off">
     </label>
+    <label>上传后未能确认挂载时（用更短的值，尽早跳过）
+      <input id="pdfIdleTimeoutUnconfirmed" type="text" placeholder="90" autocomplete="off">
+    </label>
+    <label>上传后等待「挂载确认」的窗口
+      <input id="pdfUploadWait" type="text" placeholder="20" autocomplete="off">
+    </label>
+    <label>单篇整体上限（兜底）
+      <input id="pdfJobTimeout" type="text" placeholder="1800" autocomplete="off">
+    </label>
+    <div class="small muted" style="margin-bottom:.4em">
+      判定卡住需同时满足：内容停止增长、页面<b>没有</b>「生成中」迹象、也没有新消息。
+      模型仍在深度思考时只管继续等，所以「就是比较慢」的篇目不会被误判。
+    </div>
+  </details>
+  <hr>
+  <div class="small" style="color:#555;margin-bottom:.2em">Zotero 写入授权</div>
+  <div class="row">
+    <span id="zoteroWriteStatus" class="muted">检测中…</span>
+    <button id="zoteroAuthorize" class="ghost">授权写入</button>
+  </div>
+  <div class="small muted" style="margin-bottom:.6em">
+    Zotero 本地 API：<b>读</b>不需要授权，<b>写</b>（建条目 / 写笔记 / 打标签 / 建分类）必须授权一次。
+    点按钮后 Zotero 会弹窗，请选 <b>「Always Allow」</b>（永久允许）——选「Allow」只够用一次。
+  </div>
+  <div class="row">
+    <button id="saveSettings">保存</button>
+    <span id="settingsHint"></span>
+  </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= 从 Zotero 选择 弹窗 ================= -->
+<div id="zoteroPicker" class="overlay hidden">
+  <div class="modal modal-wide">
+    <div class="modal-head">
+      <h2>从 Zotero 文库选择</h2>
+      <button id="zpClose" class="ghost">关闭</button>
+    </div>
+    <div class="row">
+      <input id="zpSearch" type="text" placeholder="搜索标题 / 作者…">
+      <button id="zpSearchBtn" class="primary">搜索</button>
+      <button id="zpRecentBtn" class="ghost">最近</button>
+    </div>
+    <div id="zpWarn" class="zp-warn hidden"></div>
+    <div class="zp-body">
+      <aside id="zpTree" class="zp-tree"></aside>
+      <div class="zp-main">
+        <div id="zpStatus" class="status"></div>
+        <ul id="zpList" class="zp-list"></ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= 论文对比 ================= -->
+<div id="papersetPanel" class="overlay hidden">
+  <div class="modal modal-wide">
+    <div class="modal-head">
+      <h2>论文对比（paper-set）</h2>
+      <button id="psClose" class="ghost">关闭</button>
+    </div>
+    <div class="row">
+      <input id="psFilter" type="text" placeholder="筛选：标题 / 标签 / 任意维度关键词…">
+      <button id="psExport" class="primary">导出 CSV</button>
+    </div>
+    <div id="psStatus" class="status"></div>
+    <div class="ps-wrap"><table id="psTable" class="ps-table"></table></div>
+  </div>
+</div>
+
+<!-- ================= 批量笔记 ================= -->
+<div id="batchPanel" class="overlay hidden">
+  <div class="modal modal-wide">
+    <div class="modal-head">
+      <h2>批量生成笔记</h2>
+      <button id="batchClose" class="ghost">关闭</button>
+    </div>
+    <div class="row">
+      <span class="muted">范围：</span>
+      <select id="batchScope"></select>
+      <button id="batchLoad" class="ghost">读取候选</button>
+      <span id="batchCandCount" class="muted"></span>
+    </div>
+    <div class="row">
+      <label class="radio"><input type="checkbox" id="optSkipThesis" checked> 跳过学位论文</label>
+      <label class="radio"><input type="checkbox" id="optClassify" checked> 自动分类（仅现有分类）</label>
+      <label class="radio"><input type="checkbox" id="optWriteback" checked> 回写 Zotero</label>
+    </div>
+    <div class="row">
+      <button id="batchStart" class="primary">开始批量</button>
+      <button id="batchStop" class="ghost">停止</button>
+      <span id="batchProg" class="muted"></span>
+    </div>
+    <div id="batchLog" class="batch-log"></div>
+    <div id="batchResultWrap" class="batch-result-wrap">
+      <table id="batchResult" class="ps-table"></table>
+    </div>
+  </div>
+</div>
+
+<!-- ================= PDF 迁移入库 ================= -->
+<div id="pdfimpPanel" class="overlay hidden">
+  <div class="modal modal-wide">
+    <div class="modal-head">
+      <h2>PDF 迁移入库</h2>
+      <button id="pdfimpClose" class="ghost">关闭</button>
+    </div>
+    <div class="row">
+      <button id="pdfimpPick" class="ghost">选择 PDF 文件（可多选）</button>
+      <input type="file" id="pdfimpFiles" multiple accept=".pdf" style="display:none">
+      <button id="pdfimpUpload" class="primary">上传入库</button>
+    </div>
+    <div id="pdfimpPicked" class="small">尚未选择文件。</div>
+    <div id="pdfimpResult" class="small">【仅存库，不生成笔记】适合先囤文献、之后走「批量笔记」一起精读。选择一个或多个 PDF → 自动建条目+附件入 Zotero（DOI 自动补全元数据）。</div>
     <hr>
-    <div class="small" style="color:#555;margin-bottom:.2em">数据目录</div>
-    <label>数据目录（缓存 / 向量库 / 浏览器内核）
-      <input id="dataDir" type="text" placeholder="留空 = 放在项目内 webapp\cache">
-    </label>
     <div class="row">
-      <button id="pickDataRoot" class="ghost">浏览…</button>
-      <span id="dataDirHint" class="small muted"></span>
+      <button id="pdfimpPickDir" class="ghost">选择下载文件夹</button>
+      <span id="pdfimpDirName" class="muted">未选择——点按钮选你的浏览器下载文件夹（无需手填路径）</span>
     </div>
-    <div class="small muted" style="margin-bottom:.6em">
-      这些数据都是可再生的（删了会重建）。默认放在项目目录里——删掉项目文件夹就能全部清理干净；
-      想省系统盘空间，可以改到大容量磁盘。
+    <div id="pdfimpDownloads" class="ps-list" style="max-height:220px"></div>
+    <div class="small">说明：选好文件夹后自动列出其中的 PDF，已入库的会带「清理原文件」按钮——确认 Zotero 里已有该文献后点它，直接从文件夹删除原 PDF（仅限同名同大小且已入库的，防误删）。</div>
+  </div>
+</div>
+
+<!-- ================= 长文精读 ================= -->
+<div id="longdocPanel" class="overlay hidden">
+  <div class="modal modal-wide">
+    <div class="modal-head">
+      <h2>长文精读（学位论文 / 专著）</h2>
+      <button id="longdocClose" class="ghost">关闭</button>
     </div>
-    <details style="margin-bottom:.6em">
-      <summary class="small" style="cursor:pointer;color:#555">高级：浏览器内核 / 网页端登录资料目录</summary>
-      <label style="margin-top:.6em">浏览器内核目录（可留空）
-        <input id="pwBrowsersDir" type="text" placeholder="留空 = 数据目录下的 playwright_browsers">
+    <div class="row">
+      <label class="filebtn">选择 PDF（学位论文 / 专著）
+        <input id="longdocFile" type="file" accept="application/pdf" hidden>
       </label>
+      <input id="longdocMax" style="width:100px" placeholder="限 N 章（可选）">
+      <select id="longdocBackend" style="width:170px">
+        <option value="webchat">网页端（零费用，慢）</option>
+        <option value="api">API（快，按量计费）</option>
+      </select>
+      <button id="longdocUpload" class="primary">开始精读</button>
+      <button id="longdocStatusBtn" class="ghost">刷新进度</button>
+    </div>
+    <div id="longdocPicked" class="small muted">尚未选择文件。</div>
+    <div class="row">
+      <span class="muted">或已入库文献：</span>
+      <button id="longdocPick" class="ghost">从 Zotero 选择</button>
+      <span id="longdocPickedItem" class="muted">未选择</span>
+      <button id="longdocStart" class="ghost">对已选条目精读</button>
+    </div>
+    <div class="small">流程：上传 → 自动入库 Zotero（建条目+挂附件）→ MinerU 解析全文（长文自动分片，1–6 分钟）→ 分章精读 → 生成「全书总纲」子笔记 + 索引进知识库。<br>
+      <b>网页端</b>：不上传文件，按批投喂章节纯文本（每批一个对话，批内逐章要点 + 批内汇总，最后开总纲对话汇总各批）。受 128K 上下文限制，长书会自动分批。</div>
+    <pre id="longdocLog" style="max-height:340px;overflow:auto;background:#f7f4ee;padding:.6em;font-size:.8em;white-space:pre-wrap">（进度显示在这里）</pre>
+  </div>
+</div>
+
+<!-- ================= 语义检索 ================= -->
+<div id="kbPanel" class="overlay hidden">
+  <div class="modal modal-wide">
+    <div class="modal-head">
+      <h2>语义检索（知识库）</h2>
+      <button id="kbClose" class="ghost">关闭</button>
+    </div>
+    <div class="row">
+      <input id="kbQuery" style="flex:1" placeholder="用自然语言提问，如：哪篇文献报告过这一现象？">
+      <button id="kbSearchBtn" class="primary">检索</button>
+      <button id="kbIndexBtn" class="ghost">更新索引</button>
+    </div>
+    <div id="kbStats" class="small muted"></div>
+    <div id="kbResults" class="ps-list" style="max-height:420px;overflow:auto"></div>
+    <div class="small">检索范围：<b>已入库</b>的文献全文（MinerU 结构化文本），已启用「中英双语扩展 + 关键词兜底」混合检索——
+      问题会自动翻成另一种语言一起检索，专名/数字由关键词命中兜底。点「查看解析」可核对原文；表格块整块给出。
+      <br><b>注意：解析 ≠ 入库，是两步。</b>精读时会把文献解析成文本存在本地，但要能被检索到，
+      还得点一次上方的「更新索引」。上一条统计里若提示「另有 N 篇已解析但未入库」，就是这个差额。</div>
+  </div>
+</div>
+
+<!-- ================= 文献检索 ================= -->
+<div id="litPanel" class="overlay hidden">
+  <div class="modal modal-wide">
+    <div class="modal-head">
+      <h2>文献检索</h2>
+      <button id="litClose" class="ghost">关闭</button>
+    </div>
+
+    <details id="litCfgFold" class="lit-fold">
+      <summary>
+        检索配置：把当前的检索式与参数存档，下次一键读回
+        <span id="litCfgState" class="muted"></span>
+      </summary>
       <div class="row">
-        <button id="pickBrowsers" class="ghost">浏览…</button>
-        <button id="installChromium" class="ghost">一键下载内核（约 150MB）</button>
-        <span id="pwHint" class="small muted"></span>
+        <select id="litTopicSel" style="max-width:240px"></select>
+        <button id="litTopicLoad" class="ghost">读取</button>
+        <button id="litTopicSave" class="ghost">存为</button>
+        <button id="litTopicDel" class="ghost">删除</button>
+        <input id="litName" placeholder="配置名（仅存档名，不决定搜什么）">
       </div>
-      <div class="small muted" style="margin-bottom:.4em">
-        用「网页端」模式（走网页版大模型、零 API 费用）时需要一个真实浏览器内核。
-        点上面的按钮会自动下载到此处配置的目录，装完即可用，不用手填路径。
-      </div>
-      <pre id="pwLog" class="pw-log hidden"></pre>
-      <label>网页端登录资料目录（可留空）
-        <input id="webchatProfileDir" type="text" placeholder="留空 = 数据目录下的 webchat_profile">
-      </label>
-      <div class="small muted" style="margin-bottom:.4em">
-        这里存的是你在网页版大模型站点登录后的状态（cookie 等），留着就不用每次重新登录；
-        删掉只会让你下次重新登录一次，没有别的影响。
-      </div>
-      <div class="row">
-        <button id="pickProfile" class="ghost">浏览登录资料目录…</button>
+      <div class="muted lit-foldhint">
+        配置名只用来区分存档。同名再存 = 覆盖那一份；改了名字再存 = 另存一份，原来的不动。
       </div>
     </details>
-    <hr>
-    <div class="small" style="color:#555;margin-bottom:.2em">知识库向量模型（语义检索用，可留空）</div>
-    <label>Embedding API Key
-      <input id="embKey" type="text" placeholder="留空则「语义检索」不可用" autocomplete="off">
-    </label>
-    <label>Embedding Base URL
-      <input id="embBaseUrl" type="text" placeholder="https://api.siliconflow.cn/v1">
-    </label>
-    <label>Embedding 模型
-      <input id="embModel" type="text" placeholder="BAAI/bge-m3">
-    </label>
-    <div class="small muted" style="margin-bottom:.6em">
-      默认用硅基流动的 BAAI/bge-m3（1024 维、免费）：
-      <a href="https://cloud.siliconflow.cn/account/ak" target="_blank" rel="noopener">注册领取 Key</a>。
+
+    <div class="lit-step">
+      <span class="lit-stepno">1</span>
+      <span class="lit-steptitle">写检索式</span>
+      <span class="muted">只有这里决定搜什么；每行一条</span>
     </div>
-    <label>MinerU API Key（长文精读 / 语义检索用，可留空）
-      <input id="mineruKey" type="text" placeholder="留空则拿不到原文表格里的数据；mineru.net 注册即得" autocomplete="off">
-    </label>
-    <div class="small muted" style="margin-bottom:.6em">
-      不填也能正常精读单篇文献，只是会降级成纯文本处理。以前要手建 core/mineru_key.txt，
-      现在在这里填就行（会写到 config/mineru_key.txt）。
+    <textarea id="litQueries" class="lit-queries" spellcheck="false"
+      placeholder="每行一条检索式，支持 AND / OR / NOT 与双引号短语。例如：&#10;(&quot;explainable AI&quot; OR &quot;interpretable machine learning&quot;) AND (visualization OR &quot;visual analytics&quot;)"></textarea>
+
+    <div class="row lit-genrow">
+      <span class="muted">研究方向</span>
+      <input id="litGenTopic" placeholder="如：作物驯化 浮选 植物遗存">
+      <button id="litGenBtn" class="ghost">生成检索式</button>
+      <button id="litClearQueries" class="ghost lit-mini">清空</button>
+      <span id="litGenHint" class="lit-genhint"></span>
     </div>
-    <hr>
-    <label>OpenAlex API Key（文献检索用，可留空）
-      <input id="openalexKey" type="text" placeholder="留空则用匿名额度：每天约 20 轮检索" autocomplete="off">
-    </label>
-    <div class="small muted" style="margin-bottom:.6em">
-      免费注册约 30 秒：<a href="https://openalex.org/settings/api" target="_blank" rel="noopener">openalex.org/settings/api</a>
-      登录后复制页面上的 key 粘贴到上面。额度从每天 $0.1 提到 $1（10 倍），还能查看用量。
+
+    <div class="lit-step">
+      <span class="lit-stepno">2</span>
+      <span class="lit-steptitle">调参数</span>
+      <span class="muted">时间窗、条数、数据源、入库分类</span>
     </div>
-    <hr>
-    <label>研究课题 / 研究问题（精读笔记里「与我课题的相关性」拿它对照）
-      <textarea id="researchQuestion" rows="3" placeholder="每行一条，可写多条研究问题"></textarea>
-    </label>
-    <div class="small muted" style="margin-bottom:.6em">
-      填写后，每篇精读笔记会<b>逐条对照</b>你的课题，写明「支撑 / 反驳 / 可借用方法或材料 / 仅背景相关」，
-      并给出「高 / 中 / 低」评级。留空则该节只写占位说明，<b>不会让模型凭空猜测相关性</b>。
-      只对之后新生成的笔记生效（已生成的笔记不会被动改动）。
+    <div class="row">
+      <input id="litSince" placeholder="起始年，如 2021" style="max-width:190px;min-width:0">
+      <input id="litPer" placeholder="每条取 N 条" style="max-width:120px;min-width:0" value="100">
+      <input id="litCollection" placeholder="入库到 Zotero 分类（不存在则新建）">
     </div>
-    <hr>
-    <details>
-      <summary class="small" style="color:#555">网页端精读：挂载与卡住检测（高级，秒）</summary>
-      <div class="small muted" style="margin:.4em 0 .6em">
-        批量笔记时，若 PDF 没能挂到网页端、或网页端长时间毫无反应，会自动<b>跳过当前文件</b>继续下一篇，
-        不再干等到超时。留空即用默认值，一般不用改。
-      </div>
-      <label>卡住判据：内容停止增长满多少秒
-        <input id="pdfIdleTimeout" type="text" placeholder="240" autocomplete="off">
-      </label>
-      <label>上传后未能确认挂载时（用更短的值，尽早跳过）
-        <input id="pdfIdleTimeoutUnconfirmed" type="text" placeholder="90" autocomplete="off">
-      </label>
-      <label>上传后等待「挂载确认」的窗口
-        <input id="pdfUploadWait" type="text" placeholder="20" autocomplete="off">
-      </label>
-      <label>单篇整体上限（兜底）
-        <input id="pdfJobTimeout" type="text" placeholder="1800" autocomplete="off">
-      </label>
-      <div class="small muted" style="margin-bottom:.4em">
-        判定卡住需同时满足：内容停止增长、页面<b>没有</b>「生成中」迹象、也没有新消息。
-        模型仍在深度思考时只管继续等，所以「就是比较慢」的篇目不会被误判。
-      </div>
+
+    <div class="row lit-opts">
+      <span class="muted">数据源</span>
+      <label class="radio"><input type="checkbox" id="litSrcOA" checked> OpenAlex（期刊/会议 + 引文图）</label>
+      <label class="radio"><input type="checkbox" id="litSrcAX" checked> arXiv（CS 预印本）</label>
+      <span class="muted">排序</span>
+      <select id="litSort" style="max-width:132px">
+        <option value="relevance">相关度</option>
+        <option value="citations">被引次数</option>
+        <option value="date">最新</option>
+      </select>
+      <label class="radio"><input type="checkbox" id="litFetchPdf" checked> 入库时抓取开放获取全文</label>
+    </div>
+
+    <div class="lit-step">
+      <span class="lit-stepno">3</span>
+      <span class="lit-steptitle">检索并入库</span>
+      <span class="muted">「检索」只读、不改库；只有「入库选中」会写进 Zotero</span>
+    </div>
+    <div class="row">
+      <button id="litRun" class="primary">检索</button>
+      <button id="litImport" class="danger">写入 Zotero：入库选中</button>
+      <button id="litExport" class="ghost">导出 CSV</button>
+      <span id="litStatus" class="status"></span>
+    </div>
+
+    <div class="lit-toolbar">
+      <label class="radio"><input type="checkbox" id="litSelAll"> 全选</label>
+      <label class="radio"><input type="checkbox" id="litHideLib" checked> 隐藏已在库</label>
+      <span id="litCount" class="muted">尚未检索</span>
+      <button id="litClearCache" class="ghost lit-mini">清空结果</button>
+      <button id="litQuota" class="ghost lit-mini">查额度</button>
+      <span class="lit-tip">点「摘要」展开原文摘要；「追引用」找引用它的后续工作，「参考文献」找它的奠基文献</span>
+    </div>
+
+    <div id="litWarn" class="zp-warn hidden"></div>
+
+    <div class="lit-wrap"><table id="litTable" class="lit-table"></table></div>
+    <details class="lit-logfold">
+      <summary>运行日志（检索 / 入库的逐条记录，默认收起给文献列表腾地方）</summary>
+      <pre id="litLog" class="lit-log">（运行日志）</pre>
     </details>
-    <hr>
-    <div class="small" style="color:#555;margin-bottom:.2em">Zotero 写入授权</div>
+  </div>
+</div>
+
+<!-- ================= 工具箱 ================= -->
+<div id="toolsPanel" class="overlay hidden">
+  <div class="modal modal-wide">
+    <div class="modal-head">
+      <h2>工具箱</h2>
+      <button id="toolsClose" class="ghost">关闭</button>
+    </div>
+
+    <h3>文献情报</h3>
     <div class="row">
-      <span id="zoteroWriteStatus" class="muted">检测中…</span>
-      <button id="zoteroAuthorize" class="ghost">授权写入</button>
-    </div>
-    <div class="small muted" style="margin-bottom:.6em">
-      Zotero 本地 API：<b>读</b>不需要授权，<b>写</b>（建条目 / 写笔记 / 打标签 / 建分类）必须授权一次。
-      点按钮后 Zotero 会弹窗，请选 <b>「Always Allow」</b>（永久允许）——选「Allow」只够用一次。
+      <button id="toolLitWatch" class="ghost">运行订阅（OpenAlex 候选清单）</button>
+      <button id="toolCoverage" class="ghost">重建覆盖矩阵报告</button>
+      <button id="toolDigest" class="ghost">更新素材库</button>
+      <button id="toolPack" class="ghost">重建写作素材包</button>
+      <button id="toolSnapshot" class="ghost">补建 MinerU 子笔记</button>
     </div>
     <div class="row">
-      <button id="saveSettings">保存</button>
-      <span id="settingsHint"></span>
+      <span class="muted">产物统一写在 reports/ 目录，见下方「reports 目录」列表（打开面板时自动刷新）。</span>
     </div>
-  </div>
 
-  <!-- 输入区：上传 PDF 或从 Zotero 选择（不手填 key） -->
-  <section class="input-zone">
-    <p class="hint">【单篇一条龙】上传 PDF，或点「从 Zotero 选择」挑一篇 → 自动存入 Zotero（建条目+挂附件+表格解析）→ 生成笔记 → 确认回写。要一次跑多篇，用顶栏「批量笔记」。</p>
+    <h3>库维护（变更类脚本默认 dry-run，应用需确认）</h3>
     <div class="row">
-      <input id="zoteroKey" type="text" readonly placeholder="未选择条目——点右侧「从 Zotero 选择」" title="由选择器填充；双击可清空重选">
-      <label class="filebtn">上传 PDF
-        <input id="pdfFile" type="file" accept="application/pdf" hidden>
-      </label>
-      <button id="pickZoteroBtn" class="ghost">从 Zotero 选择</button>
-      <button id="genBtn" class="primary">生成笔记</button>
-      <button id="longdocBtn" class="ghost">长文精读（论文/专著）</button>
+      <button id="toolTagScan" class="ghost">标签扫描</button>
+      <button id="toolTagVerify" class="ghost">标签核验</button>
+      <button id="toolDedup" class="ghost">重复扫描</button>
+      <button id="toolTagMerge" class="ghost">标签归并预览</button>
+      <button id="toolDedupApply" class="danger">应用去重方案</button>
+      <button id="toolTagMergeApply" class="danger">应用标签归并</button>
     </div>
-    <div class="row backend-row">
-      <span class="muted">后端：</span>
-      <label class="radio"><input type="radio" name="backend" value="api"> DeepSeek API（按量计费）</label>
-      <label class="radio"><input type="radio" name="backend" value="webchat" checked> 网页端 WebChat（默认，零费用）</label>
-    </div>
-    <div id="webchatRow" class="row hidden">
-      <span class="muted">网页端地址：</span>
-      <input id="webchatUrl" type="text" value="https://chat.deepseek.com" placeholder="https://chat.deepseek.com">
-      <span class="muted">首次精读时会弹出浏览器让你登录一次，登录态会保存，之后免登录</span>
-    </div>
-    <div id="genStatus" class="status"></div>
-  </section>
 
-  <!-- 从 Zotero 选择 弹窗（左：分类树；右：文献列表） -->
-  <div id="zoteroPicker" class="overlay hidden">
-    <div class="modal modal-wide">
-      <div class="modal-head">
-        <h2>从 Zotero 文库选择</h2>
-        <button id="zpClose" class="ghost">✕</button>
-      </div>
-      <div class="row">
-        <input id="zpSearch" type="text" placeholder="搜索标题 / 作者…">
-        <button id="zpSearchBtn" class="primary">搜索</button>
-        <button id="zpRecentBtn" class="ghost">最近</button>
-      </div>
-      <div id="zpWarn" class="zp-warn hidden"></div>
-      <div class="zp-body">
-        <aside id="zpTree" class="zp-tree"></aside>
-        <div class="zp-main">
-          <div id="zpStatus" class="status"></div>
-          <ul id="zpList" class="zp-list"></ul>
-        </div>
-      </div>
-    </div>
+    <h3>reports 目录</h3>
+    <ul id="toolReports" class="ps-list" style="max-height:180px"></ul>
+
+    <pre id="toolOutput" style="max-height:240px;overflow:auto;background:#f7f4ee;padding:.6em;font-size:.8em;white-space:pre-wrap">（运行输出显示在这里）</pre>
   </div>
+</div>
 
-  <!-- 论文对比（paper-set）弹窗 -->
-  <div id="papersetPanel" class="overlay hidden">
-    <div class="modal modal-wide">
-      <div class="modal-head">
-        <h2>论文对比（paper-set）</h2>
-        <button id="psClose" class="ghost">✕</button>
-      </div>
-      <div class="row">
-        <input id="psFilter" type="text" placeholder="筛选：标题 / 标签 / 任意维度关键词…">
-        <button id="psExport" class="primary">导出 CSV</button>
-      </div>
-      <div id="psStatus" class="status"></div>
-      <div class="ps-wrap"><table id="psTable" class="ps-table"></table></div>
-    </div>
-  </div>
-
-  <!-- 批量笔记 弹窗 -->
-  <div id="batchPanel" class="overlay hidden">
-    <div class="modal modal-wide">
-      <div class="modal-head">
-        <h2>批量生成笔记</h2>
-        <button id="batchClose" class="ghost">✕</button>
-      </div>
-      <div class="row">
-        <span class="muted">范围：</span>
-        <select id="batchScope"></select>
-        <button id="batchLoad" class="ghost">读取候选</button>
-        <span id="batchCandCount" class="muted"></span>
-      </div>
-      <div class="row">
-        <label class="radio"><input type="checkbox" id="optSkipThesis" checked> 跳过学位论文</label>
-        <label class="radio"><input type="checkbox" id="optClassify" checked> 自动分类（仅现有分类）</label>
-        <label class="radio"><input type="checkbox" id="optWriteback" checked> 回写 Zotero</label>
-      </div>
-      <div class="row">
-        <button id="batchStart" class="primary">开始批量</button>
-        <button id="batchStop" class="ghost">停止</button>
-        <span id="batchProg" class="muted"></span>
-      </div>
-      <div id="batchLog" class="batch-log"></div>
-      <div id="batchResultWrap" class="batch-result-wrap">
-        <table id="batchResult" class="ps-table"></table>
-      </div>
-    </div>
-  </div>
-
-  <!-- PDF 迁移入库 -->
-  <div id="pdfimpPanel" class="overlay hidden">
-    <div class="modal modal-wide">
-      <div class="modal-head">
-        <h2>PDF 迁移入库</h2>
-        <button id="pdfimpClose" class="ghost">✕</button>
-      </div>
-      <div class="row">
-        <button id="pdfimpPick" class="ghost">① 选择 PDF 文件（可多选）</button>
-        <input type="file" id="pdfimpFiles" multiple accept=".pdf" style="display:none">
-        <button id="pdfimpUpload" class="primary">② 上传入库</button>
-      </div>
-      <div id="pdfimpPicked" class="small">尚未选择文件。</div>
-      <div id="pdfimpResult" class="small">【仅存库，不生成笔记】适合先囤文献、之后走「批量笔记」一起精读。选择一个或多个 PDF → 自动建条目+附件入 Zotero（DOI 自动补全元数据）。</div>
-      <hr>
-      <div class="row">
-        <button id="pdfimpPickDir" class="ghost">选择下载文件夹</button>
-        <span id="pdfimpDirName" class="muted">未选择——点按钮选你的浏览器下载文件夹（无需手填路径）</span>
-      </div>
-      <div id="pdfimpDownloads" class="ps-list" style="max-height:220px"></div>
-      <div class="small">说明：选好文件夹后自动列出其中的 PDF，已入库的会带「清理原文件」按钮——确认 Zotero 里已有该文献后点它，直接从文件夹删除原 PDF（仅限同名同大小且已入库的，防误删）。</div>
-    </div>
-  </div>
-
-  <!-- 长文精读 -->
-  <div id="longdocPanel" class="overlay hidden">
-    <div class="modal modal-wide">
-      <div class="modal-head">
-        <h2>长文精读（学位论文 / 专著）</h2>
-        <button id="longdocClose" class="ghost">✕</button>
-      </div>
-      <div class="row">
-        <label class="filebtn">① 选择 PDF（学位论文 / 专著）
-          <input id="longdocFile" type="file" accept="application/pdf" hidden>
-        </label>
-        <input id="longdocMax" style="width:100px" placeholder="限 N 章（可选）">
-        <select id="longdocBackend" style="width:170px">
-          <option value="webchat">网页端（零费用，慢）</option>
-          <option value="api">API（快，按量计费）</option>
-        </select>
-        <button id="longdocUpload" class="primary">开始精读</button>
-        <button id="longdocStatusBtn" class="ghost">刷新进度</button>
-      </div>
-      <div id="longdocPicked" class="small muted">尚未选择文件。</div>
-      <div class="row">
-        <span class="muted">或已入库文献：</span>
-        <button id="longdocPick" class="ghost">从 Zotero 选择</button>
-        <span id="longdocPickedItem" class="muted">未选择</span>
-        <button id="longdocStart" class="ghost">对已选条目精读</button>
-      </div>
-      <div class="small">流程：上传 → 自动入库 Zotero（建条目+挂附件）→ MinerU 解析全文（长文自动分片，1–6 分钟）→ 分章精读 → 生成「全书总纲」子笔记 + 索引进知识库。<br>
-        <b>网页端</b>：不上传文件，按批投喂章节纯文本（每批一个对话，批内逐章要点 + 批内汇总，最后开总纲对话汇总各批）。受 128K 上下文限制，长书会自动分批。</div>
-      <pre id="longdocLog" style="max-height:340px;overflow:auto;background:#f7f4ee;padding:.6em;font-size:.8em;white-space:pre-wrap">（进度显示在这里）</pre>
-    </div>
-  </div>
-
-  <!-- 语义检索 -->
-  <div id="kbPanel" class="overlay hidden">
-    <div class="modal modal-wide">
-      <div class="modal-head">
-        <h2>语义检索（知识库）</h2>
-        <button id="kbClose" class="ghost">✕</button>
-      </div>
-      <div class="row">
-        <input id="kbQuery" style="flex:1" placeholder="用自然语言提问，如：哪篇文献报告过这一现象？">
-        <button id="kbSearchBtn" class="primary">检索</button>
-        <button id="kbIndexBtn" class="ghost">更新索引</button>
-      </div>
-      <div id="kbStats" class="small muted"></div>
-      <div id="kbResults" class="ps-list" style="max-height:420px;overflow:auto"></div>
-      <div class="small">检索范围：<b>已入库</b>的文献全文（MinerU 结构化文本），已启用「中英双语扩展 + 关键词兜底」混合检索——
-        问题会自动翻成另一种语言一起检索，专名/数字由关键词命中兜底。点「查看解析」可核对原文；表格块整块给出。
-        <br><b>注意：解析 ≠ 入库，是两步。</b>精读时会把文献解析成文本存在本地，但要能被检索到，
-        还得点一次上方的「更新索引」。上一条统计里若提示「另有 N 篇已解析但未入库」，就是这个差额。</div>
-    </div>
-  </div>
-
-  <!-- 文献检索（OpenAlex + arXiv，支持引文追踪与批量入库） -->
-  <div id="litPanel" class="overlay hidden">
-    <div class="modal modal-wide">
-      <div class="modal-head">
-        <h2>文献检索</h2>
-        <button id="litClose" class="ghost">关闭</button>
-      </div>
-
-      <details id="litCfgFold" class="lit-fold">
-        <summary>
-          检索配置：把当前的检索式与参数存档，下次一键读回
-          <span id="litCfgState" class="muted"></span>
-        </summary>
-        <div class="row">
-          <select id="litTopicSel" style="max-width:240px"></select>
-          <button id="litTopicLoad" class="ghost">读取</button>
-          <button id="litTopicSave" class="ghost">存为</button>
-          <button id="litTopicDel" class="ghost">删除</button>
-          <input id="litName" placeholder="配置名（仅存档名，不决定搜什么）">
-        </div>
-        <div class="muted lit-foldhint">
-          配置名只用来区分存档。同名再存 = 覆盖那一份；改了名字再存 = 另存一份，原来的不动。
-        </div>
-      </details>
-
-      <div class="lit-step">
-        <span class="lit-stepno">1</span>
-        <span class="lit-steptitle">写检索式</span>
-        <span class="muted">只有这里决定搜什么；每行一条</span>
-      </div>
-      <textarea id="litQueries" class="lit-queries" spellcheck="false"
-        placeholder="每行一条检索式，支持 AND / OR / NOT 与双引号短语。例如：&#10;(&quot;explainable AI&quot; OR &quot;interpretable machine learning&quot;) AND (visualization OR &quot;visual analytics&quot;)"></textarea>
-
-      <div class="row lit-genrow">
-        <span class="muted">研究方向</span>
-        <input id="litGenTopic" placeholder="如：作物驯化 浮选 植物遗存">
-        <button id="litGenBtn" class="ghost">生成检索式</button>
-        <button id="litClearQueries" class="ghost lit-mini">清空</button>
-        <span id="litGenHint" class="lit-genhint"></span>
-      </div>
-
-      <div class="lit-step">
-        <span class="lit-stepno">2</span>
-        <span class="lit-steptitle">调参数</span>
-        <span class="muted">时间窗、条数、数据源、入库分类</span>
-      </div>
-      <div class="row">
-        <input id="litSince" placeholder="起始年，如 2021" style="max-width:190px;min-width:0">
-        <input id="litPer" placeholder="每条取 N 条" style="max-width:120px;min-width:0" value="100">
-        <input id="litCollection" placeholder="入库到 Zotero 分类（不存在则新建）">
-      </div>
-
-      <div class="row lit-opts">
-        <span class="muted">数据源</span>
-        <label class="radio"><input type="checkbox" id="litSrcOA" checked> OpenAlex（期刊/会议 + 引文图）</label>
-        <label class="radio"><input type="checkbox" id="litSrcAX" checked> arXiv（CS 预印本）</label>
-        <span class="muted">排序</span>
-        <select id="litSort" style="max-width:132px">
-          <option value="relevance">相关度</option>
-          <option value="citations">被引次数</option>
-          <option value="date">最新</option>
-        </select>
-        <label class="radio"><input type="checkbox" id="litFetchPdf" checked> 入库时抓取开放获取全文</label>
-      </div>
-
-      <div class="lit-step">
-        <span class="lit-stepno">3</span>
-        <span class="lit-steptitle">检索并入库</span>
-        <span class="muted">「检索」只读、不改库；只有「入库选中」会写进 Zotero</span>
-      </div>
-      <div class="row">
-        <button id="litRun" class="primary">检索</button>
-        <button id="litImport" class="danger">写入 Zotero：入库选中</button>
-        <button id="litExport" class="ghost">导出 CSV</button>
-        <span id="litStatus" class="status"></span>
-      </div>
-
-      <div class="lit-toolbar">
-        <label class="radio"><input type="checkbox" id="litSelAll"> 全选</label>
-        <label class="radio"><input type="checkbox" id="litHideLib" checked> 隐藏已在库</label>
-        <span id="litCount" class="muted">尚未检索</span>
-        <button id="litClearCache" class="ghost lit-mini">清空结果</button>
-        <button id="litQuota" class="ghost lit-mini">查额度</button>
-        <span class="lit-tip">点「摘要」展开原文摘要；「追引用」找引用它的后续工作，「参考文献」找它的奠基文献</span>
-      </div>
-
-      <div id="litWarn" class="zp-warn hidden"></div>
-
-      <div class="lit-wrap"><table id="litTable" class="lit-table"></table></div>
-      <details class="lit-logfold">
-        <summary>运行日志（检索 / 入库的逐条记录，默认收起给文献列表腾地方）</summary>
-        <pre id="litLog" class="lit-log">（运行日志）</pre>
-      </details>
-    </div>
-  </div>
-
-  <!-- 结果区 -->
-  <!-- 工具箱：文献情报 / 知识分析 / 库维护 -->
-  <div id="toolsPanel" class="overlay hidden">
-    <div class="modal modal-wide">
-      <div class="modal-head">
-        <h2>工具箱</h2>
-        <button id="toolsClose" class="ghost">✕</button>
-      </div>
-
-      <h3>文献情报</h3>
-      <div class="row">
-        <button id="toolLitWatch" class="ghost">① 运行订阅（OpenAlex 候选清单）</button>
-        <button id="toolCoverage" class="ghost">② 重建覆盖矩阵报告</button>
-        <button id="toolDigest" class="ghost">③ 更新素材库</button>
-        <button id="toolPack" class="ghost">④ 重建写作素材包</button>
-        <button id="toolSnapshot" class="ghost">⑤ 补建 MinerU 子笔记</button>
-      </div>
-      <div class="row">
-        <span class="muted">产物统一写在 reports/ 目录，见下方「reports 目录」列表（打开面板时自动刷新）。</span>
-      </div>
-
-      <h3>库维护（变更类脚本默认 dry-run，应用需确认）</h3>
-      <div class="row">
-        <button id="toolTagScan" class="ghost">标签扫描</button>
-        <button id="toolTagVerify" class="ghost">标签核验</button>
-        <button id="toolDedup" class="ghost">重复扫描</button>
-        <button id="toolTagMerge" class="ghost">标签归并预览</button>
-        <button id="toolDedupApply" class="danger">应用去重方案</button>
-        <button id="toolTagMergeApply" class="danger">应用标签归并</button>
-      </div>
-
-      <h3>reports 目录</h3>
-      <ul id="toolReports" class="ps-list" style="max-height:180px"></ul>
-
-      <pre id="toolOutput" style="max-height:240px;overflow:auto;background:#f7f4ee;padding:.6em;font-size:.8em;white-space:pre-wrap">（运行输出显示在这里）</pre>
-    </div>
-  </div>
-
-  <section id="result" class="hidden">
-    <div id="targetCard" class="target-card"></div>
-    <div class="row">
-      <span id="noteTitle"></span>
-      <span id="notePages" class="muted"></span>
-    </div>
-    <textarea id="noteEditor" spellcheck="false"></textarea>
-    <div class="row">
-      <input id="tagsInput" type="text" placeholder="标签，空格分隔，如 #关键词一 #关键词二">
-      <button id="writeBtn" class="primary">确认回写 Zotero</button>
-    </div>
-    <div id="writeStatus" class="status"></div>
-    <div id="preview" class="preview"></div>
-  </section>
-
-  <script src="/static/app.js"></script>
+<script src="/static/app.js"></script>
+<script src="/static/agent.js"></script>
 </body>
 </html>

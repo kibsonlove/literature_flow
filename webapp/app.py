@@ -11,6 +11,7 @@ import logging
 import os
 import re
 import tempfile
+import threading
 
 import markdown as md
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
@@ -73,13 +74,13 @@ def _on_startup():
 
 @app.get("/")
 def index():
-    """首页。静态资源带 **mtime 版本号**：改了 app.js / style.css 之后浏览器必定拉新版，
+    """首页。静态资源带 **mtime 版本号**：改了 app.js / agent.js / style.css 之后浏览器必定拉新版，
     彻底告别「我明明改了，页面还是旧行为」（2026-09-30 反复踩：后端加了按钮处理函数，
     用户页签里还是旧 JS，点了毫无反应）。HTML 本身也禁缓存，每次都重新校验。"""
     path = os.path.join(TEMPL, "index.html")
     with open(path, encoding="utf-8") as f:
         html = f.read()
-    for name in ("app.js", "style.css"):
+    for name in ("app.js", "agent.js", "style.css"):
         try:
             v = int(os.stat(os.path.join(STATIC, name)).st_mtime)
         except Exception:
@@ -1043,3 +1044,132 @@ def _guess_type(title):
     if "z-library" in low or "出版社" in title or "press" in low:
         return "book"
     return "journalArticle"
+
+
+# ================================================================ 智能体（agent）
+# 见 docs/智能体化改造方案.md。形态：开头一次 LLM 出计划 → 确定性代码逐步执行 →
+# 危险（写库）步骤一律挂起等用户确认 → 失败才回问 LLM → 结束一次总结。
+#
+# 为什么路由都用 `def` 且把重活丢后台线程：网页端通道走 Playwright **同步** API，
+# 绝不能出现在事件循环里；而且一次 LLM 调用要开浏览器、约 30 秒+，同步返回会把
+# 请求挂死。所以：路由立刻返回任务号，前端轮询 /api/agent/status 拿进度。
+#
+# 串行约束：网页端开的是同一个浏览器 profile，同一时刻只能跑一个任务，用 _AGENT 闸门保护。
+
+_AGENT = {"busy": False}
+_AGENT_GATE = threading.Lock()
+
+
+def _agent_bg(fn, *args):
+    """把一段 agent 工作丢到后台线程跑；同时只允许一个在跑（串行闸门）。"""
+    with _AGENT_GATE:
+        if _AGENT["busy"]:
+            raise HTTPException(409, "已有智能体任务正在执行（网页端浏览器通道只能串行），请先等它结束")
+        _AGENT["busy"] = True
+
+    def _work():
+        try:
+            fn(*args)
+        except Exception:
+            logging.exception("智能体后台任务失败")
+        finally:
+            with _AGENT_GATE:
+                _AGENT["busy"] = False
+
+    threading.Thread(target=_work, daemon=True).start()
+
+
+def _agent_mod():
+    from core import agent_orchestrator as AO
+    return AO
+
+
+@app.get("/api/agent/tools")
+def agent_tools_spec():
+    """给前端展示的工具清单（只读，供「能力」面板渲染）。"""
+    from core import agent_tools as A
+    return {"tools": A.spec_json(), "busy": _AGENT["busy"]}
+
+
+@app.post("/api/agent/plan")
+def agent_plan(payload: dict):
+    """生成执行计划并落盘；立即返回任务号，计划在后台线程里出（前端轮询状态）。"""
+    AO = _agent_mod()
+    text = (payload.get("task") or "").strip()
+    if not text:
+        raise HTTPException(400, "请先输入任务内容")
+    try:
+        t = AO.new_task(text, backend=payload.get("backend") or "webchat")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    _agent_bg(AO.plan_task, t["id"])
+    return {"ok": True, "id": t["id"], "task": t}
+
+
+@app.post("/api/agent/run")
+def agent_run(payload: dict):
+    """开始/继续执行任务；跑到「下一个危险步骤」或结束。"""
+    AO = _agent_mod()
+    tid = (payload.get("id") or "").strip()
+    if not AO.get_task(tid):
+        raise HTTPException(404, "任务不存在")
+    _agent_bg(AO.advance, tid)
+    return {"ok": True, "id": tid}
+
+
+@app.post("/api/agent/confirm")
+def agent_confirm(payload: dict):
+    """用户确认某个危险步骤：放行并继续执行。"""
+    AO = _agent_mod()
+    tid = (payload.get("id") or "").strip()
+    sid = (payload.get("step_id") or "").strip()
+    if not AO.get_task(tid):
+        raise HTTPException(404, "任务不存在")
+    if not sid:
+        raise HTTPException(400, "缺少 step_id")
+    _agent_bg(AO.approve, tid, sid)
+    return {"ok": True, "id": tid}
+
+
+@app.post("/api/agent/skip")
+def agent_skip(payload: dict):
+    """跳过某一步（含危险步骤）并继续。"""
+    AO = _agent_mod()
+    tid = (payload.get("id") or "").strip()
+    sid = (payload.get("step_id") or "").strip()
+    if not AO.get_task(tid):
+        raise HTTPException(404, "任务不存在")
+    if not sid:
+        raise HTTPException(400, "缺少 step_id")
+    _agent_bg(AO.skip_step, tid, sid)
+    return {"ok": True, "id": tid}
+
+
+@app.post("/api/agent/abort")
+def agent_abort(payload: dict):
+    """中止任务（同步，立即生效）。"""
+    AO = _agent_mod()
+    tid = (payload.get("id") or "").strip()
+    if not AO.get_task(tid):
+        raise HTTPException(404, "任务不存在")
+    return {"ok": True, "task": AO.abort(tid)}
+
+
+@app.post("/api/agent/delete")
+def agent_delete(payload: dict):
+    AO = _agent_mod()
+    return {"ok": AO.delete_task((payload.get("id") or "").strip())}
+
+
+@app.get("/api/agent/status")
+def agent_status(id: str = ""):
+    """任务详情（带 id）或任务列表（不带 id）。前端轮询用。"""
+    AO = _agent_mod()
+    if not (id or "").strip():
+        from core import agent_tools as A
+        return {"tasks": AO.list_tasks(), "busy": _AGENT["busy"], "tools": len(A.TOOLS)}
+    t = AO.get_task(id.strip())
+    if not t:
+        raise HTTPException(404, "任务不存在")
+    t["busy"] = _AGENT["busy"]
+    return t
