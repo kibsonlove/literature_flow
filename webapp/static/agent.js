@@ -5,7 +5,13 @@
   "use strict";
 
   var agentBackend = "webchat";   // 与侧栏「大脑」开关联动
-  var agState = { id: null, status: null, poll: null, t0: 0, tick: null, tools: [], openHist: false, openCap: false };
+  var agState = {
+    id: null, status: null, poll: null, t0: 0, tick: null, tools: [],
+    openHist: false, openCap: false,
+    last: null,        // 最近一次拿到的任务对象（编辑/取消时用来重渲染）
+    editing: null,     // 正在编辑哪一步的参数（非空时不重建 DOM，免得冲掉输入）
+    renderedEditing: null   // 页面上当前已经画出来的编辑态（用来判断要不要重建）
+  };
 
   function el(id) { return document.getElementById(id); }
   function icons() { try { if (window.lucide && window.lucide.createIcons) window.lucide.createIcons(); } catch (e) {} }
@@ -177,7 +183,8 @@
     getJSON("/api/agent/status?id=" + encodeURIComponent(agState.id)).then(function (t) {
       agState.status = t.status;
       renderTask(t);
-      var live = (t.status === "planning" || t.status === "running");
+      var live = (t.status === "planning" || t.status === "running")
+        || (t.status === "aborted" && t.busy);   // 中止后后台还在收尾，继续盯到它停稳
       if (live) {
         agState.poll = setTimeout(pollOnce, 1200);
       } else {
@@ -209,7 +216,77 @@
     skipped: "skip-forward", awaiting_confirm: "triangle-alert"
   };
 
-  function stepHtml(s) {
+  // 任务处于这些状态时，计划还是"可改"的（已经跑完的不许改）
+  var EDITABLE = { "planned": 1, "aborted": 1, "failed": 1, "awaiting_confirm": 1 };
+  var REF_RE = /^\$s\d+(\.|$)/;
+
+  function toolSpec(name) {
+    for (var i = 0; i < agState.tools.length; i++) {
+      if (agState.tools[i].name === name) return agState.tools[i];
+    }
+    return null;
+  }
+
+  function typeOf(v) { return Object.prototype.toString.call(v); }
+
+  // 每个参数渲染一个控件；引用型（$sN…）与数组型对象只读展示——那些是上一步自动带进来的
+  function fieldHtml(tool, key, p, val) {
+    var id = "agf_" + esc(tool) + "_" + esc(key);
+    var label = '<span class="agf-label">' + esc(key) + "</span>";
+    var hintTxt = p.desc ? '<span class="agf-hint">' + esc(p.desc) + "</span>" : "";
+    if (p.required) hintTxt = '<span class="agf-hint">必填</span>' + hintTxt;
+    if (typeof val === "string" && REF_RE.test(val.trim())) {
+      return '<label class="agf-row is-ref" for="' + id + '">' + label
+        + '<input id="' + id + '" type="text" value="' + esc(val) + '" data-ref="1" readonly>'
+        + '<span class="agf-hint">自动引用：' + esc(val) + "（由前面那一步的结果带入，不用手改）</span></label>";
+    }
+    var t = (p.type || "").toLowerCase();
+    if (t === "bool" || typeof val === "boolean") {
+      return '<label class="agf-row is-check" for="' + id + '">'
+        + '<input id="' + id + '" type="checkbox" data-arg="' + esc(key) + '" data-kind="bool"'
+        + (val ? " checked" : "") + ">" + label + hintTxt + "</label>";
+    }
+    if (t === "int") {
+      return '<label class="agf-row" for="' + id + '">' + label
+        + '<input id="' + id + '" type="number" data-arg="' + esc(key) + '" data-kind="int" value="'
+        + esc(val == null ? "" : val) + '">' + hintTxt + "</label>";
+    }
+    if (t.indexOf("array<string") === 0 || typeOf(val) === "[object Array]") {
+      var arr = (typeOf(val) === "[object Array]") ? val : [];
+      var onlyStr = arr.every(function (x) { return typeof x === "string"; });
+      if (!onlyStr) {
+        return '<div class="agf-row is-ref">' + label
+          + '<div class="agf-readonly">' + esc(JSON.stringify(val)) + "</div>"
+          + '<span class="agf-hint">由前面步骤的结果自动带入，不能手改；想换内容就改用前面那一步</span></div>';
+      }
+      return '<label class="agf-row" for="' + id + '">' + label
+        + '<textarea id="' + id + '" rows="4" data-arg="' + esc(key) + '" data-kind="array">'
+        + esc(arr.join("\n")) + "</textarea>"
+        + '<span class="agf-hint">一行一条</span></label>';
+    }
+    return '<label class="agf-row" for="' + id + '">' + label
+      + '<input id="' + id + '" type="text" data-arg="' + esc(key) + '" data-kind="string" value="'
+      + esc(val == null ? "" : val) + '">' + hintTxt + "</label>";
+  }
+
+  function formHtml(s) {
+    var spec = toolSpec(s.tool) || { params: {} };
+    var params = spec.params || {};
+    var rows = Object.keys(params).map(function (k) {
+      return fieldHtml(s.tool, k, params[k], s.args ? s.args[k] : undefined);
+    }).join("");
+    if (!rows) rows = '<div class="muted">这一步没有可改的参数。</div>';
+    return '<div class="ps-form">'
+      + '<div class="agf-head">改「' + esc(s.title) + '」的参数'
+      + '<span class="muted">（' + esc(s.tool) + '）</span></div>'
+      + rows
+      + '<div class="ps-form-actions">'
+      + '<button class="primary btn-sm" data-act="save" data-step="' + esc(s.id) + '">保存</button>'
+      + '<button class="ghost btn-sm" data-act="cancel" data-step="' + esc(s.id) + '">取消</button>'
+      + "</div></div>";
+  }
+
+  function stepHtml(s, t) {
     var danger = !!s.danger;
     var cls = "plan-step is-" + s.status + (danger ? " is-danger" : "");
     var h = ['<li class="' + cls + '" data-step="' + esc(s.id) + '">'];
@@ -221,17 +298,49 @@
     if (s.why) h.push('<div class="ps-why">' + esc(s.why) + "</div>");
     if (s.summary) h.push('<div class="ps-result">' + esc(s.summary) + "</div>");
     if (s.error) h.push('<div class="ps-error">' + esc(s.error) + "</div>");
-    if (s.status === "awaiting_confirm") {
+
+    if (agState.editing === s.id) {
+      h.push(formHtml(s));                       // 正在改这一步的参数
+    } else if (s.status === "awaiting_confirm") {
       h.push('<div class="ps-gate">');
       h.push('<div class="ps-gate-impact"><i data-lucide="triangle-alert" aria-hidden="true"></i>'
         + esc(s.impact || "这一步会修改本地数据") + "</div>");
       h.push('<div class="ps-gate-actions">'
         + '<button class="primary btn-sm" data-act="confirm" data-step="' + esc(s.id) + '">确认并执行</button>'
+        + '<button class="ghost btn-sm" data-act="edit" data-step="' + esc(s.id) + '">先改参数</button>'
         + '<button class="ghost btn-sm" data-act="skip" data-step="' + esc(s.id) + '">跳过这步</button>'
         + "</div></div>");
+    } else if (s.status === "pending" && EDITABLE[t.status] && t.status !== "running") {
+      h.push('<div class="ps-edit-row">'
+        + '<button class="ghost btn-sm" data-act="edit" data-step="' + esc(s.id) + '">'
+        + '<i data-lucide="pencil" aria-hidden="true"></i>改参数</button>'
+        + '<button class="ghost btn-sm" data-act="skip" data-step="' + esc(s.id) + '">跳过这步</button>'
+        + "</div>");
     }
     h.push("</div></li>");
     return h.join("");
+  }
+
+  function planActions(t) {
+    var b = [];
+    if (t.status === "planned") b.push(['run', "primary", "play", "开始执行"]);
+    if (t.status === "aborted") b.push(['run', "primary", "play", "继续执行"]);
+    if (t.status === "failed") b.push(['run', "primary", "rotate-cw", "再试一次"]);
+    if (t.status === "planned" || t.status === "aborted" || t.status === "failed"
+      || t.status === "awaiting_confirm") {
+      b.push(["replan", "ghost", "wand-sparkles", "重新生成计划"]);
+    }
+    if (!b.length) return '<div class="plan-actions"><span class="muted">需要改动数据的话，再发一个新任务即可。</span></div>';
+    var hint = "";
+    if (t.status === "planned" || t.status === "aborted") {
+      hint = '<span class="muted">不满意可以直接改单步参数，或整份重排</span>';
+    } else if (t.status === "awaiting_confirm") {
+      hint = '<span class="muted">也可以先中止，改完再继续</span>';
+    }
+    return '<div class="plan-actions">' + b.map(function (x) {
+      return '<button class="' + x[1] + '" data-act="' + x[0] + '">'
+        + '<i data-lucide="' + x[2] + '" aria-hidden="true"></i>' + x[3] + "</button>";
+    }).join("") + hint + "</div>";
   }
 
   function renderTask(t) {
@@ -242,31 +351,33 @@
     if (!card) return;
 
     card.classList.remove("hidden");
+    agState.last = t;
+    busyUI(!!t.busy);          // 串行通道：有任务在跑时先别再提新任务
     var ex = el("agentExamples");
     if (ex) ex.classList.add("hidden");   // 已经有任务在视图里了，示例就别占地方
-    var steps = t.steps || [];
-    var nDanger = steps.filter(function (s) { return s.danger; }).length;
-    var head = '<div class="plan-head">'
-      + '<div class="plan-note">' + esc(t.note || ("任务：" + t.task)) + "</div>"
-      + '<div class="plan-meta"><span class="pill is-' + esc(t.status) + '">'
-      + esc(STATUS_TEXT[t.status] || t.status) + "</span>"
-      + '<span class="muted">' + steps.length + " 步"
-      + (nDanger ? " · " + nDanger + " 步需确认" : "") + "</span></div></div>";
-    var list = steps.length
-      ? '<ol class="plan-steps">' + steps.map(stepHtml).join("") + "</ol>"
-      : '<div class="ps-empty">' + esc(t.error || "还没有步骤") + "</div>";
-    var acts = "";
-    if (t.status === "planned") {
-      acts = '<div class="plan-actions"><button class="primary" data-act="run">'
-        + '<i data-lucide="play" aria-hidden="true"></i>开始执行</button>'
-        + '<span class="muted">写库步骤会先停下来等你确认</span></div>';
-    } else if (t.status === "failed") {
-      acts = '<div class="plan-actions"><button class="ghost" data-act="retry">'
-        + '<i data-lucide="rotate-cw" aria-hidden="true"></i>再试一次</button></div>';
-    } else if (t.status === "done") {
-      acts = '<div class="plan-actions"><span class="muted">需要改动数据的话，再发一个新任务即可。</span></div>';
+
+    // 正在编辑参数时不要重建 DOM（否则轮询会把用户刚敲的字冲掉）；
+    // 但"刚点开编辑"这一次必须重建，否则表单根本画不出来。
+    if (!agState.editing || agState.renderedEditing !== agState.editing) {
+      var steps = t.steps || [];
+      var nDanger = steps.filter(function (s) { return s.danger; }).length;
+      var head = '<div class="plan-head">'
+        + '<div class="plan-note">' + esc(t.note || ("任务：" + t.task)) + "</div>"
+        + '<div class="plan-meta"><span class="pill is-' + esc(t.status) + '">'
+        + esc(STATUS_TEXT[t.status] || t.status) + "</span>"
+        + '<span class="muted">' + steps.length + " 步"
+        + (nDanger ? " · " + nDanger + " 步需确认" : "") + "</span></div></div>";
+      var list = steps.length
+        ? '<ol class="plan-steps">' + steps.map(function (s) { return stepHtml(s, t); }).join("") + "</ol>"
+        : '<div class="ps-empty">' + esc(t.error || "还没有步骤") + "</div>";
+      card.innerHTML = head + list + planActions(t);
+      agState.renderedEditing = agState.editing;
+      card.classList.toggle("is-editing", !!agState.editing);
+    } else {
+      card.classList.add("is-editing");
+      icons();
+      return;   // 编辑中且表单已在页面上：这一轮不重建
     }
-    card.innerHTML = head + list + acts;
 
     // 日志
     var logs = t.log || [];
@@ -279,21 +390,31 @@
     if (t.summary) { sum.classList.remove("hidden"); sum.innerHTML = "<h3>总结</h3><pre>" + esc(t.summary) + "</pre>"; }
     else sum.classList.add("hidden");
 
-    // 按钮态
+    // 顶部按钮：按状态给不同动作，**任何状态都至少留一个能点的按钮**
     var runBtn = el("agentRunBtn");
     var abortBtn = el("agentAbortBtn");
-    if (runBtn) runBtn.classList.toggle("hidden", t.status !== "planned");
-    if (abortBtn) abortBtn.classList.toggle("hidden",
-      !(t.status === "running" || t.status === "awaiting_confirm" || t.status === "planned"));
+    var RUN_LABEL = { planned: "开始执行", aborted: "继续执行", failed: "再试一次" };
+    if (runBtn) {
+      var canRun = !!RUN_LABEL[t.status] && !t.busy;
+      runBtn.classList.toggle("hidden", !canRun);
+      if (canRun) runBtn.innerHTML = '<i data-lucide="play" aria-hidden="true"></i>' + RUN_LABEL[t.status];
+    }
+    if (abortBtn) {
+      abortBtn.classList.toggle("hidden",
+        t.status !== "running" && t.status !== "awaiting_confirm" && t.status !== "planned");
+    }
 
     // 顶部提示
-    if (t.status === "planning") say("正在生成计划，会打开一个浏览器窗口（约 30-60 秒），请勿关闭它…");
+    if (agState.editing) say("正在编辑参数，保存或取消后继续");
+    else if (t.status === "planning") say("正在生成计划，会打开一个浏览器窗口（约 30-60 秒），请勿关闭它…");
+    else if (t.status === "aborted") {
+      say(t.busy ? "正在停止上一个步骤，稍等再点「继续执行」" : "已中止；未执行的步骤都留着，可以改完继续跑", "warn");
+    }
     else if (t.status === "awaiting_confirm") say("有步骤要写库，请确认后继续", "warn");
     else if (t.status === "running") say("执行中，请稍候…");
-    else if (t.status === "planned") say("计划已就绪，点「开始执行」");
+    else if (t.status === "planned") say("计划已就绪：可直接执行，也可以先改某一步的参数");
     else if (t.status === "done") say("任务完成", "ok");
     else if (t.status === "failed") say(t.error || "任务失败", "err");
-    else if (t.status === "aborted") say("已中止", "warn");
 
     icons();
   }
@@ -306,10 +427,14 @@
     if (!text) { say("请先写下你想做什么", "err"); if (ta) ta.focus(); return; }
     say("正在提交任务…");
     busyUI(true);
+    agState.editing = null;
     el("agentSummary").classList.add("hidden");
+    el("agentPlanCard").classList.add("hidden");
+    el("agentLogWrap").classList.add("hidden");
     try {
       var r = await postJSON("/api/agent/plan", { task: text, backend: agentBackend });
       agState.id = r.id;
+      agState.last = r.task;
       renderTask(r.task);
       beginPoll();
     } catch (err) {
@@ -320,8 +445,11 @@
 
   async function onRun() {
     if (!agState.id) return;
+    var label = (agState.last && agState.last.status === "aborted") ? "继续执行…"
+      : (agState.last && agState.last.status === "failed") ? "再试一次…" : "开始执行…";
     try {
-      say("开始执行…");
+      agState.editing = null;
+      say(label);
       await postJSON("/api/agent/run", { id: agState.id });
       agState.t0 = Date.now();
       beginPoll();
@@ -331,18 +459,85 @@
   async function onAbort() {
     if (!agState.id) return;
     try {
-      await postJSON("/api/agent/abort", { id: agState.id });
-      var t = await getJSON("/api/agent/status?id=" + encodeURIComponent(agState.id));
-      renderTask(t); stopPoll(); startTickStop(t);
+      agState.editing = null;
+      var r = await postJSON("/api/agent/abort", { id: agState.id });
+      agState.last = r.task;
+      renderTask(r.task);
+      stopPoll(); startTickStop(r.task);
+      // 后台线程可能还在把当前这一步跑完，继续轮询到它真正停下（busy 变 false）
+      if (r.task && r.task.busy) agState.poll = setTimeout(pollOnce, 1500);
     } catch (e) { say(e.message, "err"); }
   }
 
   async function onGate(act, stepId) {
     if (!agState.id) return;
     try {
+      agState.editing = null;
       say(act === "confirm" ? "已确认，继续执行…" : "已跳过该步骤…");
       await postJSON("/api/agent/" + (act === "confirm" ? "confirm" : "skip"),
         { id: agState.id, step_id: stepId });
+      beginPoll();
+    } catch (e) { say(e.message, "err"); }
+  }
+
+  // ---- 改参数 ----
+  function collectArgs(stepId) {
+    var li = document.querySelector('.plan-step[data-step="' + stepId + '"]');
+    if (!li) return {};
+    var args = {};
+    li.querySelectorAll("[data-arg]").forEach(function (inp) {
+      var k = inp.dataset.arg, kind = inp.dataset.kind;
+      if (kind === "bool") args[k] = !!inp.checked;
+      else if (kind === "int") {
+        var n = parseInt(inp.value, 10);
+        args[k] = isNaN(n) ? inp.value : n;
+      } else if (kind === "array") {
+        args[k] = inp.value.split("\n").map(function (x) { return x.trim(); })
+          .filter(function (x) { return x.length > 0; });
+      } else args[k] = inp.value;
+    });
+    return args;
+  }
+
+  async function onEdit(stepId) {
+    if (!agState.id) return;
+    try {
+      var t = await getJSON("/api/agent/status?id=" + encodeURIComponent(agState.id));
+      agState.last = t;
+      agState.editing = stepId;
+      renderTask(t);
+      var form = document.querySelector('.plan-step[data-step="' + stepId + '"] .ps-form');
+      if (form) form.scrollIntoView({ behavior: "smooth", block: "center" });
+      var first = form && form.querySelector("input,textarea");
+      if (first) first.focus();
+    } catch (e) { say(e.message, "err"); }
+  }
+
+  async function onSave(stepId) {
+    if (!agState.id) return;
+    var args = collectArgs(stepId);
+    try {
+      var r = await postJSON("/api/agent/update", {
+        id: agState.id, steps: [{ id: stepId, args: args }]
+      });
+      agState.editing = null;
+      agState.last = r.task;
+      renderTask(r.task);
+      say("已保存该步的参数", "ok");
+    } catch (e) { say("保存失败：" + e.message, "err"); }
+  }
+
+  function onCancelEdit() {
+    agState.editing = null;
+    if (agState.last) renderTask(agState.last);
+  }
+
+  async function onReplan() {
+    if (!agState.id) return;
+    try {
+      agState.editing = null;
+      say("正在重新生成计划…");
+      await postJSON("/api/agent/replan", { id: agState.id });
       beginPoll();
     } catch (e) { say(e.message, "err"); }
   }
@@ -352,8 +547,11 @@
     if (!b) return;
     var act = b.dataset.act;
     if (act === "confirm" || act === "skip") onGate(act, b.dataset.step);
-    else if (act === "run") onRun();
-    else if (act === "retry") { if (agState.id) onRun(); }
+    else if (act === "edit") onEdit(b.dataset.step);
+    else if (act === "save") onSave(b.dataset.step);
+    else if (act === "cancel") onCancelEdit();
+    else if (act === "replan") onReplan();
+    else if (act === "run" || act === "retry") onRun();
   });
 
   var form = el("agentForm");
@@ -431,6 +629,8 @@
     var it = e.target.closest ? e.target.closest(".hist-item") : null;
     if (!it) return;
     agState.id = it.dataset.id;
+    agState.editing = null;
+    agState.t0 = 0;
     getJSON("/api/agent/status?id=" + encodeURIComponent(agState.id)).then(function (t) {
       renderTask(t);
       if (t.status === "running" || t.status === "planning") beginPoll();

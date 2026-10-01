@@ -1758,3 +1758,52 @@ summary svg { width: 1.05em; height: 1.05em; flex: none; }
 
 /* 工具能力清单：默认 dry-run、只有 apply 才写库的那类，用中间态标注，别一律标成「写库」 */
 .cap-flag.is-warn { background: var(--c-warn-soft); color: var(--c-warn); border: 1px solid var(--c-warn-line); }
+
+/* --------------------------------------------------------------------------
+   21. 计划可修改：单步「改参数」表单 + 每步操作行
+   （2026-10-01 用户反馈：计划出来后改不了、中止后按钮没了）
+   -------------------------------------------------------------------------- */
+.ps-edit-row { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-top: var(--sp-2); }
+
+.plan-step.is-editing { background: var(--c-bg-sunken); }
+.plan-card.is-editing .plan-actions { opacity: .5; pointer-events: none; }
+
+.ps-form {
+  margin-top: var(--sp-3);
+  padding: var(--sp-3);
+  background: var(--c-surface);
+  border: 1px solid var(--c-line);
+  border-left: 3px solid var(--c-primary);
+  border-radius: var(--r-md);
+}
+.agf-head { font-size: var(--fs-sm); font-weight: 600; color: var(--c-ink); margin-bottom: var(--sp-3); }
+.agf-head .muted { font-weight: 400; font-size: var(--fs-xs); margin-left: var(--sp-1); }
+
+.agf-row { display: block; margin-bottom: var(--sp-3); }
+.agf-row .agf-label {
+  display: block; font-size: var(--fs-sm); font-weight: 600; color: var(--c-ink-2);
+  font-family: var(--font-mono); margin-bottom: var(--sp-1);
+}
+.agf-row input[type="text"],
+.agf-row input[type="number"],
+.agf-row textarea {
+  width: 100%; min-width: 0; padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--c-line-strong); border-radius: var(--r-sm);
+  font-size: var(--fs-md); font-family: var(--font-sans); color: var(--c-ink);
+  background: var(--c-surface);
+}
+.agf-row textarea { font-family: var(--font-mono); font-size: var(--fs-sm); line-height: 1.6; resize: vertical; }
+.agf-row input:focus-visible, .agf-row textarea:focus-visible {
+  outline: 2px solid var(--c-primary); outline-offset: 1px; border-color: var(--c-primary);
+}
+.agf-row input[readonly] { background: var(--c-bg-sunken); color: var(--c-muted); cursor: default; }
+.agf-hint { display: block; font-size: var(--fs-xs); color: var(--c-muted); margin-top: var(--sp-1); line-height: 1.5; }
+.agf-row.is-check { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.agf-row.is-check .agf-label { display: inline; margin: 0; font-family: var(--font-sans); }
+.agf-row.is-check input[type="checkbox"] { width: 16px; height: 16px; flex: none; }
+.agf-readonly {
+  font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--c-muted);
+  background: var(--c-bg-sunken); border: 1px dashed var(--c-line-strong); border-radius: var(--r-sm);
+  padding: var(--sp-2); max-height: 90px; overflow: auto; white-space: pre-wrap; word-break: break-all;
+}
+.ps-form-actions { display: flex; gap: var(--sp-2); align-items: center; margin-top: var(--sp-1); }

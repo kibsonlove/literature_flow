@@ -1147,12 +1147,39 @@ def agent_skip(payload: dict):
 
 @app.post("/api/agent/abort")
 def agent_abort(payload: dict):
-    """中止任务（同步，立即生效）。"""
+    """中止任务（同步，立即生效）。未执行的步骤会保留，可再点「继续执行」。"""
     AO = _agent_mod()
     tid = (payload.get("id") or "").strip()
     if not AO.get_task(tid):
         raise HTTPException(404, "任务不存在")
     return {"ok": True, "task": AO.abort(tid)}
+
+
+@app.post("/api/agent/update")
+def agent_update(payload: dict):
+    """修改计划里**还没执行**的步骤（参数 / 标题）。同步，立即生效。
+
+    payload: {id, steps: [{id, title?, args?}]}
+    """
+    AO = _agent_mod()
+    tid = (payload.get("id") or "").strip()
+    if not AO.get_task(tid):
+        raise HTTPException(404, "任务不存在")
+    try:
+        return {"ok": True, "task": AO.update_steps(tid, payload.get("steps") or [])}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/agent/replan")
+def agent_replan(payload: dict):
+    """用原任务文本重新生成一份计划（要调 LLM，放后台线程）。"""
+    AO = _agent_mod()
+    tid = (payload.get("id") or "").strip()
+    if not AO.get_task(tid):
+        raise HTTPException(404, "任务不存在")
+    _agent_bg(AO.replan, tid)
+    return {"ok": True, "id": tid}
 
 
 @app.post("/api/agent/delete")

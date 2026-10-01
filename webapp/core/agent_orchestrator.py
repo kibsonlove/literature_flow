@@ -454,19 +454,23 @@ def _one_batch_guard(task, step):
 
 
 _RUNNING = set()
+_ABORT_FLAG = set()          # 协作式中止：后台线程每轮循环都来问一次
 
 
 def advance(task_id, log=None):
-    """执行任务，直到「需要用户确认的危险步骤」「完成」或「失败」。
+    """执行（或继续执行）任务，直到「需要用户确认的危险步骤」「完成」「中止」或「失败」。
 
     ⚠ 格外注意：**不能**在整个执行期间持有任务锁。一次执行可能几分钟（要开浏览器），
     而前端要不断轮询读状态——持锁会把所有轮询请求堵死（曾踩：页面看着像卡死）。
     所以这里只用 `_RUNNING` 集合做"同一任务不并发执行"的互斥，文件读写各自走短锁。
+
+    既然是被显式调用来执行的，这里就把上一次的"中止请求"清掉——**中止过的任务可以继续跑**。
     """
     with _LOCK:
         if task_id in _RUNNING:
             return get_task(task_id) or {}
         _RUNNING.add(task_id)
+        _ABORT_FLAG.discard(task_id)
     try:
         return _advance_inner(task_id, log)
     finally:
@@ -474,25 +478,47 @@ def advance(task_id, log=None):
             _RUNNING.discard(task_id)
 
 
+def _take_abort(task_id):
+    """取出（并清除）中止请求。"""
+    with _LOCK:
+        if task_id in _ABORT_FLAG:
+            _ABORT_FLAG.discard(task_id)
+            return True
+    return False
+
+
+def _stop_now(t):
+    """就地收尾：把任务置为已中止，正在跑的那一步退回 pending（结果不确定）。
+
+    之所以要在这里再写一次：步骤跑完时的 `_save(t)` 会把内存里的 "running"
+    覆盖掉 `abort()` 刚写下的 "aborted"，所以发现中止请求后必须由执行方来落这个状态。
+    """
+    t["status"] = "aborted"
+    for s in t["steps"]:
+        if s["status"] == "running":
+            s["status"] = "pending"
+            s["summary"] = "上次执行到这里被打断，未确认是否完成；继续执行会重跑这一步"
+    return _save(t)
+
+
 def _advance_inner(task_id, log=None):
     t = get_task(task_id)
     if not t:
         raise ValueError("任务不存在")
-    if t["status"] in ("done", "aborted"):
+    if t["status"] == "done":
         return t
     t["status"] = "running"
     _save(t)
 
     while True:
+        if _take_abort(task_id):
+            return _stop_now(t)
         step = next((s for s in t["steps"] if s["status"] in ("pending", "awaiting_confirm")), None)
         if not step:
             break
         # 危险步骤：挂起等确认（先把参数里的引用解析出来，好让用户看到准确影响面）
         if A.is_danger(step["tool"], step["args"]) and not step.get("approved"):
-            try:
-                step["impact"] = A.impact(step["tool"], _resolve_refs(step["args"], t["steps"]))
-            except Exception:
-                pass
+            step["impact"] = _safe_impact(step, t["steps"])
             step["status"] = "awaiting_confirm"
             t["status"] = "awaiting_confirm"
             _log(t, f"⚠ 第 {step['id']} 步「{step['title']}」会改动数据，已暂停等你确认：{step.get('impact')}")
@@ -527,6 +553,11 @@ def _advance_inner(task_id, log=None):
             _log(t, ("✓ " if step["status"] == "done" else "✗ ")
                     + f"第 {step['id']} 步{'完成' if step['status'] == 'done' else '失败'}："
                     + (step["summary"] or step["error"]))
+
+        # 这一步跑完了：如果用户在这期间点了「中止」，就此打住，别再往下走
+        # （尤其别再去触发"失败回炉"那次额外的 LLM 调用）
+        if _take_abort(task_id):
+            return _stop_now(t)
 
         if step["status"] == "failed":
             if not _try_recover(t, step):
@@ -617,33 +648,137 @@ def approve(task_id, step_id, log=None):
 
 
 def skip_step(task_id, step_id, log=None):
-    """跳过某一步（含危险步骤），随后继续执行。"""
+    """跳过某一步（含危险步骤）。
+
+    只有在任务**正在执行**（running / awaiting_confirm）时才"跳过并继续"；
+    如果任务还停在计划上（planned / aborted / failed），就只把这一步划掉、**不启动执行**——
+    否则用户在计划上按个「跳过」，整个任务会莫名其妙地跑起来。
+    """
     with _lock_for(task_id):
         t = get_task(task_id)
         if not t:
             raise ValueError("任务不存在")
+        prev = t["status"]
         step = next((s for s in t["steps"] if s["id"] == step_id), None)
         if not step:
             raise ValueError("步骤不存在")
+        if step["status"] in ("done", "failed"):
+            raise ValueError("这一步已经执行过了，不能跳过")
         step["status"] = "skipped"
         step["summary"] = step.get("summary") or "已被用户跳过"
         _log(t, f"用户跳过了第 {step['id']} 步「{step['title']}」")
         _save(t)
-    return advance(task_id, log)
+    if prev in ("running", "awaiting_confirm"):
+        return advance(task_id, log)
+    return t
 
 
-def abort(task_id):
+def update_steps(task_id, patches):
+    """修改计划里**还没执行**的步骤（参数 / 标题）。
+
+    patches: [{"id": "s2", "args": {...}, "title": "…"}, …]
+    已执行（done/failed）的步骤一律不许改——改了会让日志与结果对不上。
+    改完会重算这一步的「是否需要确认」与「影响面」（比如把维护脚本的 apply 打开，
+    它就从"只读"变成"写库，需要确认"）。
+    """
     with _lock_for(task_id):
         t = get_task(task_id)
         if not t:
             raise ValueError("任务不存在")
+        if t["status"] in ("running", "planning"):
+            raise ValueError("任务正在执行，请先「中止」再改计划")
+        by_id = {s["id"]: s for s in t["steps"]}
+        changed = []
+        for p in (patches or []):
+            if not isinstance(p, dict):
+                continue
+            s = by_id.get((p.get("id") or "").strip())
+            if not s:
+                continue
+            if s["status"] in ("done", "failed", "skipped"):
+                raise ValueError(f"第 {s['id']} 步已经执行过，不能修改")
+            before = json.dumps(s.get("args") or {}, ensure_ascii=False, sort_keys=True)
+            if isinstance(p.get("args"), dict):
+                s["args"] = p["args"]
+            if (p.get("title") or "").strip():
+                s["title"] = str(p["title"]).strip()[:80]
+            after = json.dumps(s.get("args") or {}, ensure_ascii=False, sort_keys=True)
+            if before != after:
+                # 参数改过 → 之前那次「确认」作废。否则"改了入库分类，却沿用上一次的确认"
+                # 就等于用户确认的是另一件事，这在写库步骤上是不可接受的。
+                s["approved"] = False
+            s["danger"] = A.is_danger(s["tool"], s["args"])
+            s["impact"] = _safe_impact(s, t["steps"]) if s["danger"] else ""
+            if not s["danger"] and s["status"] == "awaiting_confirm":
+                s["status"] = "pending"
+            changed.append(s["id"])
+        if not changed:
+            return t
+        # 改完可能已经没有"待确认"的步骤了 → 任务从 awaiting_confirm 退回 planned
+        if t["status"] == "awaiting_confirm" and \
+                not any(s["status"] == "awaiting_confirm" for s in t["steps"]):
+            t["status"] = "planned"
+        _log(t, "已修改步骤：" + "、".join(changed))
+        return _save(t)
+
+
+def _safe_impact(step, steps):
+    """算危险步骤的影响面。
+
+    参数里带 `$sN` 引用时尽量解析；解析不了（比如引用的字段实际不存在）**必须说清楚
+    "预估不了"**——宁可显示得保守，也不能因为回退成空参数而把影响面缩小成一个假数字，
+    用户在确认界面上就是靠这个数字判断"要不要放行"的。
+    """
+    try:
+        return A.impact(step["tool"], _resolve_refs(step["args"], steps))
+    except Exception:
+        return A.impact(step["tool"], {}) + "（提示：参数里的引用暂时取不到值，实际影响面可能更大，请自行核对）"
+
+
+def replan(task_id, log=None):
+    """用原任务文本重新出一份计划（覆盖现有步骤）。改不动计划时的"推倒重来"。"""
+    with _lock_for(task_id):
+        t = get_task(task_id)
+        if not t:
+            raise ValueError("任务不存在")
+        if task_id in _RUNNING:
+            raise ValueError("任务正在执行，请先「中止」再重新生成计划")
+        t["steps"] = []
+        t["seq"] = 0
+        t["recover_count"] = 0
+        t["note"] = ""
+        t["summary"] = ""
+        t["error"] = ""
+        t["log"] = []
+        t["status"] = "planning"
+        _log(t, "正在按原任务重新生成计划…")
+        _save(t)
+    return plan_task(task_id, log)
+
+
+def abort(task_id):
+    """中止任务。
+
+    **保留未执行步骤的状态**（不要把它们标成 skipped！否则用户没法从断点续跑——
+    这是踩过的坑）。只有当前正在跑的那一步会被退回 pending，因为它的结果不确定。
+    真正的停止靠 `_ABORT_FLAG` 与后台线程协作：它在每轮循环开头问一次，然后自己退出。
+    """
+    with _lock_for(task_id):
+        t = get_task(task_id)
+        if not t:
+            raise ValueError("任务不存在")
+        if t["status"] in ("done",):
+            return t
         t["status"] = "aborted"
         for s in t["steps"]:
-            if s["status"] in ("pending", "awaiting_confirm", "running"):
-                s["status"] = "skipped"
-                s["summary"] = "任务已中止"
-        _log(t, "任务已中止")
-        return _save(t)
+            if s["status"] == "running":
+                s["status"] = "pending"
+                s["summary"] = "上次执行到这里被打断，未确认是否完成；继续执行会重跑这一步"
+        _log(t, "任务已中止（未执行的步骤已保留，可点「继续执行」接着跑）")
+        _save(t)
+    with _LOCK:
+        _ABORT_FLAG.add(task_id)
+    return t
 
 
 def delete_task(task_id):
