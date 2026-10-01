@@ -137,6 +137,45 @@ def _prune():
             pass
 
 
+def reap_inflight_on_startup(stale_min=5):
+    """服务启动时调用：把明显"无主"的任务标成失败。
+
+    刚起来的进程里不可能有执行线程，所以还停在 planning / running 的任务，
+    多半是上次进程被关掉时留下的孤儿。但**不能无条件回收**——同一份 cache 有可能
+    被另一个进程同时用着（排查时会另起一个端口），那种任务其实还活着。
+    因此加一道保险：只有**超过 stale_min 分钟没有任何更新**的才动手。
+    （正常执行会频繁刷任务文件：每个步骤边界都存盘，长步骤也有日志限频落盘。）
+
+    不处理的话，这些孤儿会永远显示"正在生成计划…/执行中"，用户没有任何出口。
+    """
+    n = 0
+    for fn in os.listdir(_tasks_dir()):
+        if not fn.endswith(".json"):
+            continue
+        p = os.path.join(_tasks_dir(), fn)
+        try:
+            with open(p, encoding="utf-8") as f:
+                t = json.load(f)
+        except Exception:
+            continue
+        if t.get("status") not in ("planning", "running"):
+            continue
+        if _age_min(t) < stale_min:
+            continue
+        with _lock_for(t["id"]):
+            for s in t.get("steps") or []:
+                if s.get("status") == "running":
+                    s["status"] = "pending"
+                    s["summary"] = "服务重启导致中断，未确认是否完成；继续执行会重跑这一步"
+            t["status"] = "failed"
+            t["error"] = ("这件任务在上次服务关闭时中断了（后台线程已不在）。"
+                          "点「继续执行」可以从断点接着跑，或点「重新生成计划」重排。")
+            _log(t, t["error"])
+            _save(t)
+        n += 1
+    return n
+
+
 def _age_min(t):
     ts = t.get("updated_at") or t.get("created_at") or ""
     try:
@@ -145,7 +184,7 @@ def _age_min(t):
         return 0.0
 
 
-def _reap_stale(plan_min=10, run_min=120):
+def _reap_stale(plan_min=10, run_min=30):
     """回收"卡死"的任务，避免它们永远停在「正在生成计划…」这种没有出口的状态。
 
     什么算卡死：状态是 planning / running，但**没有任何执行线程在跑**（不在 `_RUNNING` 里），
@@ -293,6 +332,9 @@ _PLAN_PROMPT = """把下面这个任务拆成一份执行计划。你只能使�
      或该引用上一步却写成 `"queries": []`（留空导致这一步必然失败）。
 4. 参数值必须是字面量或上述 `$sN` 引用，不要写表达式。必填参数一律不能省。
    确实不知道填什么的可选参数，就**整个省略**，不要给空字符串或空数组。
+5. **入库要设上限**：检索动辄几百条，用户多半不想要全部。用 `lit_import` 时给 `max` 填一个合理值
+   （没特别说明就给 50），并把 `fetch_pdf` 只在你判断用户确实要全文时才开——每篇都要下载，很慢。
+6. 写库步骤的参数要能一眼看懂"会发生什么"。别把检索式、条数这类细节留空让用户自己猜。
 
 【用户的研究课题】（用于理解任务背景，可能为空）
 {research}
@@ -310,7 +352,7 @@ _PLAN_PROMPT = """把下面这个任务拆成一份执行计划。你只能使�
 {{"note": "先根据方向生成检索式，再检索，最后经确认后入库。", "steps": [
   {{"title": "生成检索式", "tool": "lit_generate_queries", "args": {{"topic": "explainable AI 与数据可视化、人机交互的交叉", "count": 4}}, "why": "得到覆盖不同侧面的布尔检索式"}},
   {{"title": "检索文献", "tool": "lit_search", "args": {{"queries": "$s1.queries", "since": "2023", "per_page": 50}}, "why": "在 OpenAlex / arXiv 找候选"}},
-  {{"title": "入库到 XAI 分类", "tool": "lit_import", "args": {{"records": "$s2.results", "collection": "XAI", "fetch_pdf": true}}, "why": "把候选写进 Zotero（会等用户确认）"}}
+  {{"title": "入库到 XAI 分类", "tool": "lit_import", "args": {{"records": "$s2.results", "max": 50, "collection": "XAI", "fetch_pdf": false}}, "why": "取前 50 条写进 Zotero（会等用户确认）"}}
 ]}}"""
 
 _PLAN_FIX = """
@@ -688,9 +730,15 @@ def _advance_inner(task_id, log=None):
         # 危险步骤：挂起等确认（先把参数里的引用解析出来，好让用户看到准确影响面）
         if A.is_danger(step["tool"], step["args"]) and not step.get("approved"):
             step["impact"] = _safe_impact(step, t["steps"])
+            gi = _gate_issues(step, t["steps"])
+            if gi:
+                step["warning"] = "；".join(gi)[:200]
             step["status"] = "awaiting_confirm"
             t["status"] = "awaiting_confirm"
             _log(t, f"⚠ 第 {step['id']} 步「{step['title']}」会改动数据，已暂停等你确认：{step.get('impact')}")
+            if gi:
+                _log(t, "   注意：这一步的参数现在有问题——" + "；".join(gi)
+                        + "。建议先点「先改参数」补上，别直接确认。")
             _save(t)
             return t
 
@@ -714,7 +762,22 @@ def _advance_inner(task_id, log=None):
             _save(t)
             _log(t, f"✗ 第 {step['id']} 步失败：{step['error']}")
         else:
-            ctx = A.Ctx(log=lambda m: _log(t, m), task_id=t["id"], backend=t["backend"])
+            # 长步骤（比如一次入库几百条）会持续往日志里写。任务文件原本只在"步骤切换"时才落盘，
+            # 于是这几分钟里界面上什么都看不到、像死了。这里让日志回调**限频落盘**（最多 2 秒一次），
+            # 前端轮询就能实时看到进度，出问题时也能看到卡在哪一条。
+            _last = [0.0]
+
+            def _step_log(msg, _t=t, _last=_last):
+                _log(_t, msg)
+                now = time.time()
+                if now - _last[0] > 2:
+                    _last[0] = now
+                    try:
+                        _save(_t)
+                    except Exception:
+                        pass
+
+            ctx = A.Ctx(log=_step_log, task_id=t["id"], backend=t["backend"])
             res = A.run(step["tool"], args, ctx)
             _settle(step, res)
             step["status"] = "done" if res.get("ok") else "failed"
@@ -772,8 +835,10 @@ def _try_recover(t, failed):
             return False
         t["seq"] = seq
         # 保留已完成的步骤与失败步骤（作为历史），用补救步骤替换其后未执行的剩余步骤
+        failed["retried"] = True      # 前端据此标注"这步没做成，已由下面的补救步骤接替"
         t["steps"] = [s for s in t["steps"] if s["status"] in ("done", "skipped")] + [failed] + steps
-        _log(t, f"已追加 {len(steps)} 步补救计划：" + "；".join(s["title"] for s in steps))
+        _log(t, f"第 {failed['id']} 步没做成，已自动补 {len(steps)} 步重做（只补没做成的事，成功过的不重来）："
+                + "；".join(s["title"] for s in steps))
         return True
     except Exception as e:
         _log(t, f"补救失败：{str(e)[:200]}")
@@ -891,6 +956,27 @@ def update_steps(task_id, patches):
             t["status"] = "planned"
         _log(t, "已修改步骤：" + "、".join(changed))
         return _save(t)
+
+
+def _gate_issues(step, steps):
+    """挂起等确认之前，先确认"这一步现在到底跑不跑得起来"。
+
+    与 `_plan_issues` 的区别：这里**真的去解析引用**，所以能抓到"第 N 步的输出里根本没有那个字段"
+    这种只有跑起来才暴露的问题。目的：别让用户点了「确认并执行」才发现参数是空的，
+    白烧一轮"失败回炉"（那要多开一次浏览器）。
+
+    参数有问题**不阻止挂起**——用户可以在卡片上点「先改参数」补好再确认。
+    """
+    out = []
+    spec = A.get(step["tool"]) or {}
+    for k, p in (spec.get("params") or {}).items():
+        if p.get("required") and _is_blank(step["args"].get(k)):
+            out.append(f"必填参数 {k} 是空的")
+    try:
+        _resolve_refs(step["args"], steps)
+    except Exception as e:
+        out.append(str(e)[:140])
+    return out
 
 
 def _safe_impact(step, steps):

@@ -70,6 +70,13 @@ def _on_startup():
             ensure_zotero(log=lambda m: logging.info("[zotero] %s", m))
         except Exception:
             logging.exception("ensure_zotero 失败")
+        try:
+            from core import agent_orchestrator as AO
+            n = AO.reap_inflight_on_startup()
+            if n:
+                logging.info("[agent] 清理了 %d 个上次服务关闭时中断的任务", n)
+        except Exception:
+            logging.exception("清理中断任务失败")
 
     threading.Thread(target=_run, daemon=True).start()
 

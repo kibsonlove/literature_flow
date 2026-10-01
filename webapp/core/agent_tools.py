@@ -121,6 +121,16 @@ def _t_lit_import(args, ctx):
     records = [r for r in _as_list(records) if isinstance(r, dict) and (r.get("title") or "").strip()]
     if not records:
         return _err("lit_import", "没有可入库的条目（records 为空或没有标题）")
+    total = len(records)
+    # 上限：一次检索轻松几百条，全量写库既慢又多半不是用户想要的。让它能只取前 N 条。
+    try:
+        cap = int(args.get("max") or 0)
+    except Exception:
+        cap = 0
+    capped = 0
+    if cap > 0 and total > cap:
+        capped = total - cap
+        records = records[:cap]
     collection = (args.get("collection") or "").strip()
     tags = [t for t in _as_list(args.get("tags")) if str(t).strip()]
     try:
@@ -135,8 +145,11 @@ def _t_lit_import(args, ctx):
     where = f"到分类「{collection}」" if collection else "到 Zotero 库"
     msg = (f"入库{where}：新建 {r.get('created', 0)} 条，跳过重复 {r.get('skipped', 0)} 条"
            f"，抓到全文 {r.get('pdf_ok', 0)} 篇")
+    if capped:
+        msg += f"（共检索到 {total} 条，按上限只取前 {cap} 条，其余 {capped} 条未处理）"
     return _ok("lit_import", msg, {"created": r.get("created"), "skipped": r.get("skipped"),
                                    "pdf_ok": r.get("pdf_ok"), "pdf_fail": r.get("pdf_fail"),
+                                   "total_found": total, "capped": capped,
                                    "collection": collection, "items": r.get("items") or []})
 
 
@@ -399,10 +412,14 @@ TOOLS = [
         "params": {
             "records": {"type": "array<object>", "required": True,
                         "desc": "要入库的检索结果对象列表，通常写 \"$s1.results\""},
+            "max": {"type": "int", "required": False,
+                    "desc": "最多入库多少条（可选）。检索结果动辄几百条，全量入库又慢又多半不是想要的，"
+                            "建议按相关度取前 N 条，例如 50"},
             "collection": {"type": "string", "required": False,
                            "desc": "入库到哪个 Zotero 分类；不存在会新建；留空则只进库不分类"},
             "tags": {"type": "array<string>", "required": False},
-            "fetch_pdf": {"type": "bool", "required": False, "desc": "是否抓开放获取全文，默认 true"},
+            "fetch_pdf": {"type": "bool", "required": False,
+                          "desc": "是否抓开放获取全文，默认 true（注意：条数多时会很慢，每篇都要下载）"},
         },
         "danger": True,
         "fn": _t_lit_import,
@@ -567,18 +584,34 @@ def is_danger(name, args=None):
 
 
 def impact(name, args):
-    """危险步骤的影响面：给用户看的"这一步会动到什么、动多少"。"""
+    """危险步骤的影响面：给用户看的"这一步会动到什么、动多少"。
+
+    ⚠ 拿不到准确条数时**必须说"不确定"**，绝不能糊一个数字上去。踩过的坑：
+    参数里 `records` 缺失（模型漏写）时，原来会显示"将写入 1 条文献"——
+    用户看到 347 条检索结果却被告知只写 1 条，完全被误导。
+    """
     args = args or {}
     if name == "lit_import":
         recs = args.get("records")
-        n = len(recs) if isinstance(recs, list) else 1
         where = (args.get("collection") or "").strip()
-        return f"将向 Zotero 写入 {n} 条文献" + (f"，归入分类「{where}」" if where else "（不改变分类）")
+        tail = f"，归入分类「{where}」" if where else "（不改变分类）"
+        try:
+            cap = int(args.get("max") or 0)
+        except Exception:
+            cap = 0
+        if not isinstance(recs, list):
+            return ("将把上一步检索到的文献写入 Zotero" + tail
+                    + "（具体条数要等这一步真的取到上一步结果才知道）")
+        n = len(recs)
+        if cap > 0 and n > cap:
+            return f"将向 Zotero 写入 {cap} 条文献{tail}（共检索到 {n} 条，已按上限取前 {cap} 条）"
+        return f"将向 Zotero 写入 {n} 条文献" + tail
     if name == "batch_notes":
         keys = args.get("keys")
-        n = len(keys) if isinstance(keys, list) else 0
         back = "并回写 Zotero 笔记" if args.get("writeback", True) else "（不回写）"
-        return f"将为 {n} 篇文献生成精读笔记{back}"
+        if not isinstance(keys, list):
+            return f"将对选中的文献批量生成精读笔记{back}（具体篇数要等这一步取到候选清单才知道）"
+        return f"将为 {len(keys)} 篇文献生成精读笔记{back}"
     if name == "run_maintenance":
         return f"将执行变更脚本「{args.get('tool')}」并应用改动（不可逆，请先在面板里 dry-run 预览）"
     return "该步骤会修改本地数据"

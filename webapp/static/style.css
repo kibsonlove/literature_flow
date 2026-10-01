@@ -1831,3 +1831,28 @@ summary svg { width: 1.05em; height: 1.05em; flex: none; }
    23. 历史任务头的批量清理按钮
    -------------------------------------------------------------------------- */
 .hist-tools { margin-left: auto; display: flex; align-items: center; gap: var(--sp-2); }
+
+/* --------------------------------------------------------------------------
+   24. 「这步没做成、已由补救步骤接替」的说明（避免被误读为"跑了两遍"）
+   -------------------------------------------------------------------------- */
+.ps-retried {
+  margin-top: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--c-bg-sunken);
+  border-left: 3px solid var(--c-line-strong);
+  border-radius: var(--r-sm);
+  color: var(--c-ink-2);
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+}
+.ps-retried svg { flex: none; margin-top: 2px; color: var(--c-muted); }
+.ps-retried b { color: var(--c-ink); }
+
+/* --------------------------------------------------------------------------
+   25. 后端标记：API 是花钱的，必须一眼看得见；网页端是零费用
+   -------------------------------------------------------------------------- */
+.pill.is-api { background: var(--c-warn-soft); color: var(--c-warn); border: 1px solid var(--c-warn-line); font-weight: 600; }
+.pill.is-backend { background: var(--c-bg-sunken); color: var(--c-muted); border: 1px solid var(--c-line); }

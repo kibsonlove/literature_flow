@@ -19,6 +19,7 @@ import json
 import os
 import re
 import time
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -578,11 +579,18 @@ def delete_topic(slug):
 
 # ---------- OA 全文下载 ----------
 
-def download_pdf(url, dest_dir, timeout=60, max_mb=40):
-    """下载开放获取 PDF。返回本地路径；非 PDF 内容或失败返回 (None, 原因)。"""
+def download_pdf(url, dest_dir, timeout=20, max_mb=40, total_timeout=90):
+    """下载开放获取 PDF。返回本地路径；非 PDF 内容或失败返回 (None, 原因)。
+
+    ⚠ `timeout` 只作用于**每次 socket 读写**，不限制总时长：服务端只要每 20 秒吐一点数据，
+    就能把这一步无限拖住。踩过的坑：一次 347 条的入库卡在某篇 PDF 上，
+    整条任务从 20:25 起再无任何动作、界面看着像死了。所以这里额外加**总时长上限**
+    （`total_timeout`），到点就放弃这一篇继续下一篇。
+    """
     if not url:
         return None, "无 OA 链接"
     req = urllib.request.Request(url, headers={"User-Agent": UA})
+    deadline = time.time() + total_timeout
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             head = r.read(1024)
@@ -597,6 +605,13 @@ def download_pdf(url, dest_dir, timeout=60, max_mb=40):
             with open(path, "wb") as w:
                 w.write(head)
                 while True:
+                    if time.time() > deadline:
+                        w.close()
+                        try:
+                            os.remove(path)
+                        except Exception:
+                            pass
+                        return None, f"下载超过 {total_timeout} 秒，已跳过"
                     chunk = r.read(65536)
                     if not chunk:
                         break

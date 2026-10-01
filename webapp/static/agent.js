@@ -96,8 +96,10 @@
     seg.querySelectorAll(".seg-btn").forEach(function (b) {
       b.addEventListener("click", function () { setBrain(b.dataset.brain); });
     });
-    var checked = document.querySelector("input[name=backend]:checked");
-    setBrain(checked ? checked.value : "webchat");
+    // 每次打开页面都从「网页端」起步：**不信任浏览器恢复的单选状态**。
+    // 网页端零费用、API 按量计费，而浏览器刷新会悄悄把上次选的 API 恢复回来，
+    // 用户很容易在没察觉的情况下一直花 API 的钱（踩过）。要 API 就当场点一下。
+    setBrain("webchat");
   })();
 
   // ================= Zotero 状态灯 =================
@@ -321,6 +323,10 @@
     }
     if (s.summary) h.push('<div class="ps-result">' + esc(s.summary) + "</div>");
     if (s.error) h.push('<div class="ps-error">' + esc(s.error) + "</div>");
+    if (s.retried) {
+      h.push('<div class="ps-retried"><i data-lucide="corner-down-right" aria-hidden="true"></i>'
+        + "这一步没做成（<b>没有改动任何数据</b>），已由下面的补救步骤接替重做。</div>");
+    }
 
     if (agState.editing === s.id) {
       h.push(formHtml(s, t));                    // 正在改这一步的参数
@@ -395,6 +401,9 @@
         + '<div class="plan-note">' + esc(t.note || ("任务：" + t.task)) + "</div>"
         + '<div class="plan-meta"><span class="pill is-' + esc(t.status) + '">'
         + esc(STATUS_TEXT[t.status] || t.status) + "</span>"
+        + (t.backend === "api"
+            ? '<span class="pill is-api">API·计费</span>'
+            : '<span class="pill is-backend">网页端·免费</span>')
         + '<span class="muted">' + steps.length + " 步"
         + (nDanger ? " · " + nDanger + " 步需确认" : "") + "</span></div></div>";
       var empty = t.status === "planning"
@@ -439,24 +448,29 @@
     }
 
     // 顶部提示
-    if (agState.editing) say("正在编辑参数，保存或取消后继续");
+    var msg = "", kind = "";
+    if (agState.editing) msg = "正在编辑参数，保存或取消后继续";
     else if (t.status === "planning") {
       // 计划阶段也要给出路：卡住时告诉用户能中止、能重排
       var secs = agState.t0 ? Math.round((Date.now() - agState.t0) / 1000) : 0;
-      if (secs > 150) {
-        say("已经等了 " + secs + " 秒还没出计划，多半是卡住了：点「中止」，再用「重新生成计划」重试", "warn");
-      } else {
-        say("正在生成计划，会打开一个浏览器窗口（约 30-60 秒），请勿关闭它…");
-      }
+      if (secs > 150) { msg = "已经等了 " + secs + " 秒还没出计划，多半是卡住了：点「中止」，再用「重新生成计划」重试"; kind = "warn"; }
+      else msg = "正在生成计划，会打开一个浏览器窗口（约 30-60 秒），请勿关闭它…";
     }
     else if (t.status === "aborted") {
-      say(t.busy ? "正在停止上一个步骤，稍等再点「继续执行」" : "已中止；未执行的步骤都留着，可以改完继续跑", "warn");
+      msg = t.busy ? "正在停止上一个步骤，稍等再点「继续执行」" : "已中止；未执行的步骤都留着，可以改完继续跑";
+      kind = "warn";
     }
-    else if (t.status === "awaiting_confirm") say("有步骤要写库，请确认后继续", "warn");
-    else if (t.status === "running") say("执行中，请稍候…");
-    else if (t.status === "planned") say("计划已就绪：可直接执行，也可以先改某一步的参数");
-    else if (t.status === "done") say("任务完成", "ok");
-    else if (t.status === "failed") say(t.error || "任务失败", "err");
+    else if (t.status === "awaiting_confirm") { msg = "有步骤要写库，请确认后继续"; kind = "warn"; }
+    else if (t.status === "running") msg = "执行中，请稍候…";
+    else if (t.status === "planned") msg = "计划已就绪：可直接执行，也可以先改某一步的参数";
+    else if (t.status === "done") { msg = "任务完成"; kind = "ok"; }
+    else if (t.status === "failed") { msg = t.error || "任务失败"; kind = "err"; }
+    // 用 API 就是真金白银，必须一直摆在眼前（不能只在侧栏角落里写着）
+    if (agentBackend === "api") {
+      msg = (msg ? msg + "　" : "") + "当前后端是 API（按量计费）";
+      if (kind !== "err") kind = "warn";
+    }
+    if (msg) say(msg, kind);
 
     icons();
   }
