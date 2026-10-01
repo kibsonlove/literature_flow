@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
 """领域包（domain pack）：精读提示词与界面文案全部由配置驱动，代码零领域绑定。
 
+注意：「与我课题的相关性」这一节**不属于领域包**，它来自全局的用户研究课题
+（settings.json 的 research_question，在网页端「设置」里填写，全局一份）；
+未填写时该节只写占位说明，绝不让模型凭空推测相关性。
+
 目录结构：
     config/domain.json          当前激活的领域包（向后兼容；不存在时用库中第一个）
     config/domains/<name>.json  领域包库（多领域可复用）
@@ -236,9 +240,40 @@ def pick_domain(title, sample, auto_generate=True, log=lambda m: None):
 def app_title():
     return load_domain()["app_title"]
 
+def _topic_section():
+    """「与我课题的相关性」章节模板。
+
+    有课题（界面「设置 → 研究课题」，全局一份）→ 要求逐条对照并给高/中/低评级；
+    没有 → 保留占位说明。**任何情况下都不许让模型凭空推测相关性**（那是编造）。
+    """
+    try:
+        from .config import research_question
+        rq = research_question()
+    except Exception:
+        rq = ""
+    if not rq:
+        return (
+            "## 与我课题的相关性\n"
+            "- 未设置研究课题，略去针对性对照。\n"
+            "（可在网页端「设置」里填写「研究课题 / 研究问题」，之后重新精读本文即可补上这一节）"
+        )
+    quoted = "\n".join("> " + ln for ln in rq.splitlines() if ln.strip())
+    return (
+        "## 与我课题的相关性\n"
+        "- 我的研究课题（供对照，不要复制到答案里）：\n"
+        "\n" + quoted + "\n\n"
+        "- 对照结论（逐条对照上面每一个课题问题，写明属于「支撑 / 反驳 / 可借用其方法或材料 / "
+        "仅背景相关」中的哪一种；有具体判断就指名道姓，不要写泛泛的客套话）：\n"
+        "- 相关性评级：<高 | 中 | 低>\n"
+        "  - 高 = 直接支撑或推翻我课题的关键判断；中 = 方法、材料或思路可借用；低 = 仅背景相关。\n"
+        "  - 只写一个词，后接一句话理由。"
+    )
+
+
 def system_prompt(domain_name=None):
     d = load_domain(domain_name)
     dim_rows = "\n".join(f"| {x} | |" for x in d["dimensions"])
+    topic_md = _topic_section()
     return f"""你是一位{d['domain']}文献的精读助手。\
 你的任务是为一篇论文产出结构化精读笔记，重心放在"文章得出了什么结论、怎么论证的"，而非平铺方法数字。
 
@@ -283,8 +318,7 @@ def system_prompt(domain_name=None):
 
 {d['dialogue_md']}
 
-## 与我课题的相关性
-- 暂无真实课题（未指定研究问题，略去针对性相关性分析）。
+{topic_md}
 
 ## 建议标签
 {d['tags_md']}
@@ -293,5 +327,5 @@ def system_prompt(domain_name=None):
 - 重点展开核心结论、讨论要点、学术对话的分寸；中等篇幅写领域核心维度与研究对象背景；从简或省略不支撑结论的明细数据。
 - 量化数据只在支撑结论时引用并标页码；表格数字若全文未给精确值，必须写"需回看核对"，绝不可编造全文没有的数字。
 - 页码用 [pN] 表示 PDF 第 N 页。
-- "与我课题的相关性"固定写上面的占位行（用户暂无论题）。
+- "与我课题的相关性"必须真按上面的课题逐条对照并给出评级；若该节写的是"未设置研究课题"的占位说明，就原样照抄那一行，**不得凭猜测编造相关性**。
 """

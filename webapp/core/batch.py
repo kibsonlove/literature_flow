@@ -10,12 +10,25 @@ import threading
 import time
 from datetime import datetime
 
-from .extract import pdf_path_from_zotero_key
+from .config import pdf_wait_timeouts
+from .extract import pdf_path_from_zotero_key, pdf_health
 from .prompt import SYSTEM_PROMPT
 from .render import wrap_html
-from .webchat import run_webchat
+from .webchat import run_webchat, UploadFailed, StalledError
 from . import mineru
 from .zotero_io import _client, add_note, add_tags, list_collections, ping
+
+# 结果状态 -> 中文标签（用于结束时的统计汇总）
+_STAT_LABEL = {
+    "ok": "成功",
+    "already_noted": "已有笔记跳过",
+    "skipped": "学位论文跳过",
+    "no_pdf": "无 PDF 跳过",
+    "bad_pdf": "PDF 不可用跳过",
+    "upload_failed": "挂载失败跳过",
+    "stalled": "卡住跳过",
+    "error": "报错跳过",
+}
 
 _CLASSIFY_INSTRUCTION = """
 
@@ -189,6 +202,23 @@ def candidates(collection_key=None, skip_thesis=True, limit=300):
     return out
 
 
+def _recover_session(sess, i, total):
+    """失败/卡住后恢复网页会话，避免后续篇目连锁失败。
+
+    刻意**不做熔断**（按用户要求）：只在会话层面恢复，任务会一直把队列跑完；
+    恢复失败也不中止，仅在日志里明确提示，由用户决定是否手动停止。
+    """
+    _log(f"[{i}/{total}] 正在恢复网页会话（避免后续篇目连锁失败）…")
+    try:
+        ok = sess.recover()
+    except Exception as e:
+        ok = False
+        _log(f"  恢复会话异常：{repr(e)[:120]}")
+    if not ok:
+        _log("  ⚠ 会话恢复失败，后续篇目可能继续失败；建议停止任务并检查登录/网络。")
+    return ok
+
+
 def _run(keys, opts):
     with _LOCK:
         _STATE.update({
@@ -200,6 +230,8 @@ def _run(keys, opts):
     z = _client()
     col_cache = _collections_map()
     classify_instr = _classify_instruction(col_cache.keys())
+    tw = pdf_wait_timeouts()
+    job_timeout = opts.get("job_timeout") or tw["job_timeout"]
 
     # 二次保险：开始前再查一遍已有六维笔记的条目（防止面板里挂着旧候选列表导致重复生成）
     noted = set()
@@ -269,6 +301,19 @@ def _run(keys, opts):
                     _STATE["done"] += 1
                 continue
 
+            # 入库前体检：0 字节 / 下载中断残片 / 损坏 / 站点错误页存成的假 PDF，
+            # 传上去必然挂载失败且会白等一整个超时窗口 —— 在这里直接拦掉。
+            h = pdf_health(path)
+            if not h["ok"]:
+                _log(f"[{i}/{len(keys)}] ✗ PDF 不可用，跳过：{h['reason']}（{title[:30]}）")
+                with _LOCK:
+                    _STATE["results"].append({"key": k, "title": title, "status": "bad_pdf",
+                                              "error": h["reason"]})
+                    _STATE["done"] += 1
+                continue
+            if h["scanned"]:
+                _log(f"[{i}/{len(keys)}] 提示：PDF 无文字层（疑似扫描件），依赖 MinerU/OCR：{title[:30]}")
+
             _log(f"[{i}/{len(keys)}] 生成中：{title[:36]}")
             t0 = time.time()
             # MinerU 表格增强：优先读缓存，缺失则调云 API（有 key 才启用）
@@ -297,7 +342,10 @@ def _run(keys, opts):
                     _log(f"    MinerU 表格获取失败（忽略，回退纯文本）：{repr(e)[:80]}")
             html = sess.ask(
                 path, prompt, title=title,
-                timeout=1800, stop_check=lambda: _STATE["stop"],
+                timeout=job_timeout, stop_check=lambda: _STATE["stop"],
+                idle_timeout=tw["idle_timeout"],
+                idle_timeout_unconfirmed=tw["idle_timeout_unconfirmed"],
+                upload_wait=tw["upload_wait"],
             )
             if tables_len:
                 n_tab, heads = mineru.tables_info(tables)
@@ -330,11 +378,25 @@ def _run(keys, opts):
                 })
                 _STATE["done"] += 1
 
+        except (UploadFailed, StalledError) as e:
+            # 挂载失败 / 卡住 → 立刻跳过当前文件，保证整体任务继续。
+            kind = getattr(e, "kind", "error")
+            label = getattr(e, "label", "生成失败")
+            _log(f"[{i}/{len(keys)}] ✗ {label}，跳过本篇继续下一篇：{str(e)[:140]}")
+            with _LOCK:
+                _STATE["results"].append({"key": k, "title": title, "status": kind,
+                                          "error": str(e)[:200]})
+                _STATE["done"] += 1
+            if not _STATE["stop"]:
+                _recover_session(sess, i, len(keys))
         except Exception as e:
             _log(f"[{i}/{len(keys)}] ✗ 失败：{repr(e)[:180]}")
             with _LOCK:
                 _STATE["results"].append({"key": k, "title": title, "status": "error", "error": str(e)[:200]})
                 _STATE["done"] += 1
+            # 上下文崩溃（浏览器被关/页面失效）也属于需要恢复的情况
+            if not _STATE["stop"]:
+                _recover_session(sess, i, len(keys))
 
     if sess:
         sess.close()
@@ -342,6 +404,29 @@ def _run(keys, opts):
         _STATE["running"] = False
         _STATE["current"] = ""
         _STATE["finished_at"] = time.time()
+        results_snapshot = list(_STATE["results"])
+
+    # 结束汇总：各状态篇数 + 需要人工处理的篇目（跳过的 ≠ 失败的，分开看）
+    try:
+        stat = {}
+        for r in results_snapshot:
+            s = r.get("status") or "?"
+            stat[s] = stat.get(s, 0) + 1
+        order = ["ok", "already_noted", "skipped", "no_pdf", "bad_pdf",
+                 "upload_failed", "stalled", "error"]
+        seg = [f"{_STAT_LABEL.get(s, s)} {stat[s]}" for s in order if s in stat]
+        seg += [f"{s} {c}" for s, c in stat.items() if s not in order]
+        if seg:
+            _log("统计：" + " ｜ ".join(seg))
+        bad = [r for r in results_snapshot
+               if r.get("status") in ("bad_pdf", "upload_failed", "stalled", "error")]
+        if bad:
+            _log(f"以下 {len(bad)} 篇未成功，处理后可在候选列表重新勾选重跑：" + "；".join(
+                f"{r.get('title', '')[:24]}（{_STAT_LABEL.get(r.get('status'), r.get('status'))}）"
+                for r in bad[:20]) + ("…" if len(bad) > 20 else ""))
+    except Exception:
+        pass
+
     _log("批量任务结束。")
 
 

@@ -130,6 +130,39 @@
       登录后复制页面上的 key 粘贴到上面。额度从每天 $0.1 提到 $1（10 倍），还能查看用量。
     </div>
     <hr>
+    <label>研究课题 / 研究问题（精读笔记里「与我课题的相关性」拿它对照）
+      <textarea id="researchQuestion" rows="3" placeholder="每行一条，可写多条研究问题"></textarea>
+    </label>
+    <div class="small muted" style="margin-bottom:.6em">
+      填写后，每篇精读笔记会<b>逐条对照</b>你的课题，写明「支撑 / 反驳 / 可借用方法或材料 / 仅背景相关」，
+      并给出「高 / 中 / 低」评级。留空则该节只写占位说明，<b>不会让模型凭空猜测相关性</b>。
+      只对之后新生成的笔记生效（已生成的笔记不会被动改动）。
+    </div>
+    <hr>
+    <details>
+      <summary class="small" style="color:#555">网页端精读：挂载与卡住检测（高级，秒）</summary>
+      <div class="small muted" style="margin:.4em 0 .6em">
+        批量笔记时，若 PDF 没能挂到网页端、或网页端长时间毫无反应，会自动<b>跳过当前文件</b>继续下一篇，
+        不再干等到超时。留空即用默认值，一般不用改。
+      </div>
+      <label>卡住判据：内容停止增长满多少秒
+        <input id="pdfIdleTimeout" type="text" placeholder="240" autocomplete="off">
+      </label>
+      <label>上传后未能确认挂载时（用更短的值，尽早跳过）
+        <input id="pdfIdleTimeoutUnconfirmed" type="text" placeholder="90" autocomplete="off">
+      </label>
+      <label>上传后等待「挂载确认」的窗口
+        <input id="pdfUploadWait" type="text" placeholder="20" autocomplete="off">
+      </label>
+      <label>单篇整体上限（兜底）
+        <input id="pdfJobTimeout" type="text" placeholder="1800" autocomplete="off">
+      </label>
+      <div class="small muted" style="margin-bottom:.4em">
+        判定卡住需同时满足：内容停止增长、页面<b>没有</b>「生成中」迹象、也没有新消息。
+        模型仍在深度思考时只管继续等，所以「就是比较慢」的篇目不会被误判。
+      </div>
+    </details>
+    <hr>
     <div class="small" style="color:#555;margin-bottom:.2em">Zotero 写入授权</div>
     <div class="row">
       <span id="zoteroWriteStatus" class="muted">检测中…</span>
@@ -324,17 +357,46 @@
         <button id="litClose" class="ghost">关闭</button>
       </div>
 
-      <div class="row">
-        <select id="litTopicSel" style="max-width:240px"></select>
-        <button id="litTopicLoad" class="ghost">载入主题</button>
-        <button id="litTopicSave" class="ghost">保存为主题</button>
-        <button id="litTopicDel" class="ghost">删除主题</button>
-        <span class="muted">主题存在本机 config/topics/，下次一键重跑</span>
+      <details id="litCfgFold" class="lit-fold">
+        <summary>
+          检索配置：把当前的检索式与参数存档，下次一键读回
+          <span id="litCfgState" class="muted"></span>
+        </summary>
+        <div class="row">
+          <select id="litTopicSel" style="max-width:240px"></select>
+          <button id="litTopicLoad" class="ghost">读取</button>
+          <button id="litTopicSave" class="ghost">存为</button>
+          <button id="litTopicDel" class="ghost">删除</button>
+          <input id="litName" placeholder="配置名（仅存档名，不决定搜什么）">
+        </div>
+        <div class="muted lit-foldhint">
+          配置名只用来区分存档。同名再存 = 覆盖那一份；改了名字再存 = 另存一份，原来的不动。
+        </div>
+      </details>
+
+      <div class="lit-step">
+        <span class="lit-stepno">1</span>
+        <span class="lit-steptitle">写检索式</span>
+        <span class="muted">只有这里决定搜什么；每行一条</span>
+      </div>
+      <textarea id="litQueries" class="lit-queries" spellcheck="false"
+        placeholder="每行一条检索式，支持 AND / OR / NOT 与双引号短语。例如：&#10;(&quot;explainable AI&quot; OR &quot;interpretable machine learning&quot;) AND (visualization OR &quot;visual analytics&quot;)"></textarea>
+
+      <div class="row lit-genrow">
+        <span class="muted">研究方向</span>
+        <input id="litGenTopic" placeholder="如：作物驯化 浮选 植物遗存">
+        <button id="litGenBtn" class="ghost">生成检索式</button>
+        <button id="litClearQueries" class="ghost lit-mini">清空</button>
+        <span id="litGenHint" class="lit-genhint"></span>
       </div>
 
+      <div class="lit-step">
+        <span class="lit-stepno">2</span>
+        <span class="lit-steptitle">调参数</span>
+        <span class="muted">时间窗、条数、数据源、入库分类</span>
+      </div>
       <div class="row">
-        <input id="litName" placeholder="主题名，如：可解释人工智能">
-        <input id="litSince" placeholder="起始年，如 2021" style="max-width:132px;min-width:0">
+        <input id="litSince" placeholder="起始年，如 2021" style="max-width:190px;min-width:0">
         <input id="litPer" placeholder="每条取 N 条" style="max-width:120px;min-width:0" value="100">
         <input id="litCollection" placeholder="入库到 Zotero 分类（不存在则新建）">
       </div>
@@ -352,12 +414,14 @@
         <label class="radio"><input type="checkbox" id="litFetchPdf" checked> 入库时抓取开放获取全文</label>
       </div>
 
-      <textarea id="litQueries" class="lit-queries" spellcheck="false"
-        placeholder="每行一条检索式，支持 AND / OR / NOT 与双引号短语。例如：&#10;(&quot;explainable AI&quot; OR &quot;interpretable machine learning&quot;) AND (visualization OR &quot;visual analytics&quot;)"></textarea>
-
+      <div class="lit-step">
+        <span class="lit-stepno">3</span>
+        <span class="lit-steptitle">检索并入库</span>
+        <span class="muted">「检索」只读、不改库；只有「入库选中」会写进 Zotero</span>
+      </div>
       <div class="row">
         <button id="litRun" class="primary">检索</button>
-        <button id="litImport" class="primary">入库选中</button>
+        <button id="litImport" class="danger">写入 Zotero：入库选中</button>
         <button id="litExport" class="ghost">导出 CSV</button>
         <span id="litStatus" class="status"></span>
       </div>
@@ -374,7 +438,10 @@
       <div id="litWarn" class="zp-warn hidden"></div>
 
       <div class="lit-wrap"><table id="litTable" class="lit-table"></table></div>
-      <pre id="litLog" class="lit-log">（运行日志）</pre>
+      <details class="lit-logfold">
+        <summary>运行日志（检索 / 入库的逐条记录，默认收起给文献列表腾地方）</summary>
+        <pre id="litLog" class="lit-log">（运行日志）</pre>
+      </details>
     </div>
   </div>
 

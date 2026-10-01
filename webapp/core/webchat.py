@@ -15,6 +15,29 @@ import json
 
 _APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # webapp/
 
+
+# ---------------------------------------------------------------- 异常类型
+# 批量任务需要区分「PDF 挂载失败」「卡住」与普通报错，才能分别统计并跳过当前文件。
+# 均继承 RuntimeError，兼容既有调用方（read.py / app.py）的 except 写法。
+
+class WebChatError(RuntimeError):
+    """网页端会话错误基类。"""
+    kind = "webchat_error"
+    label = "网页端错误"
+
+
+class UploadFailed(WebChatError):
+    """PDF 没能挂到网页端输入区（上传入口异常 / 明确报错）。"""
+    kind = "upload_failed"
+    label = "PDF 挂载失败"
+
+
+class StalledError(WebChatError):
+    """已发送但长时间无任何进展，且页面也没有生成中的迹象——判定为卡住。"""
+    kind = "stalled"
+    label = "生成卡住"
+
+
 def _paths_cfg():
     """读取 config/paths.json（本机配置，不入库），允许覆盖 webchat 相关目录。"""
     try:
@@ -66,13 +89,23 @@ def _apply_browser_path():
         pass
 
 
-def run_webchat(pdf_path, prompt, title="", headless=False, timeout=300, log=None, url=None):
+def run_webchat(pdf_path, prompt, title="", headless=False, timeout=300, log=None, url=None,
+                idle_timeout=None, idle_timeout_unconfirmed=None, upload_wait=None):
     """打开网页端 LLM，上传 PDF、发送 prompt，返回抓取到的 Markdown/文本回答。
 
     log: 可选回调函数(str)，用于回传进度（webapp 可显示给前端）。
     url: 目标站点地址；默认 https://chat.deepseek.com，可自定义其它网页端 LLM。
+    idle_timeout / idle_timeout_unconfirmed / upload_wait: 卡住与挂载检测阈值，
+        默认从设置（settings.json）读取，见 config.pdf_wait_timeouts()。
     """
     from playwright.sync_api import sync_playwright
+
+    from .config import pdf_wait_timeouts
+    _tw = pdf_wait_timeouts()
+    idle_timeout = _tw["idle_timeout"] if idle_timeout is None else idle_timeout
+    idle_timeout_unconfirmed = (_tw["idle_timeout_unconfirmed"]
+                                if idle_timeout_unconfirmed is None else idle_timeout_unconfirmed)
+    upload_wait = _tw["upload_wait"] if upload_wait is None else upload_wait
 
     target_url = (url or DEEPSEEK_URL).strip() or DEEPSEEK_URL
 
@@ -153,16 +186,21 @@ def run_webchat(pdf_path, prompt, title="", headless=False, timeout=300, log=Non
         # 开启"深度思考"模式（若已开则不动）
         _enable_deep_think(page, say=say)
 
-        # 上传 PDF（先点附件按钮让 file input 出现）
+        # 上传 PDF（先点附件按钮让 file input 出现）；返回是否**已确认**挂载
         n_before = _composer_pdf_count(page)
-        _upload_pdf(page, pdf_path, say=say)
+        confirmed = _upload_and_confirm(page, pdf_path, n_before=n_before, say=say,
+                                        wait=upload_wait)
         _verify_attachment(page, pdf_path, n_before=n_before, say=say)
 
         # 输入指令并发送（优先点发送按钮，回退 Enter）
         _send_prompt(page, prompt, say=say)
 
         # 等待回答完成并抓取（抓页面 HTML 结构，保留标题/表格/列表）
-        answer_html = _wait_answer_html(page, timeout=timeout, say=say)
+        # 未确认挂载时用更短的 idle 窗口：这种多半是请求没发出去，不必久等
+        answer_html = _wait_answer_html(
+            page, timeout=timeout, say=say,
+            idle_timeout=idle_timeout, idle_timeout_unconfirmed=idle_timeout_unconfirmed,
+            unconfirmed=not confirmed)
 
         # 收尾：删除本轮对话（跑完即删，避免侧栏堆积）
         try:
@@ -354,6 +392,89 @@ def _upload_pdf(page, pdf_path, say=lambda m: None):
     page.wait_for_timeout(3000)
 
 
+# 明确的"上传失败"提示文案。只认上传前后**新增**的命中，避免侧栏/历史对话里的残留误判。
+_UPLOAD_ERR_PAT = re.compile(
+    r"上传失败|上传出错|文件上传失败|上传中断|上传被取消"
+    r"|文件过大|超出大小限制|超过\s*\d+\s*MB|附件过大"
+    r"|不支持的文件|文件格式不支持|不支持的格式|解析文件失败|无法解析"
+    r"|网络错误|请检查网络|服务异常"
+    r"|upload failed|file too large|unsupported file|network error",
+    re.I,
+)
+
+
+def _upload_error_hits(page):
+    """当前页面命中「上传失败」类文案的片段集合（用于取上传前后差集）。"""
+    try:
+        txt = page.inner_text("body") or ""
+    except Exception:
+        return set()
+    return {m.group(0) for m in _UPLOAD_ERR_PAT.finditer(txt)}
+
+
+def _wait_attachment_confirm(page, n_before, timeout=20):
+    """轮询输入区 .pdf 计数，看是否比上传前增加。True = **已确认挂载**。
+
+    注意：网页端改版后输入区可能扫不到文件名，此时返回 False 也不代表失败
+    （历史上按"文件名相似度"做硬校验，误杀过大量可用篇目）——所以调用方必须把
+    False 当作"无法确认"，而不是"失败"。
+    """
+    if n_before is None or n_before < 0:
+        return False
+    deadline = time.time() + max(3, timeout)
+    while time.time() < deadline:
+        try:
+            if _composer_pdf_count(page) > n_before:
+                return True
+        except Exception:
+            pass
+        page.wait_for_timeout(1000)
+    return False
+
+
+def _upload_and_confirm(page, pdf_path, n_before=None, say=lambda m: None, wait=20):
+    """上传 PDF 并确认结果。返回 True=已确认挂载，False=无法确认（**不算失败**）。
+
+    判定顺序（刻意保守，不重蹈"硬校验误杀"）：
+      ① 上传动作本身报错（找不到 file input）→ UploadFailed
+      ② 输入区附件计数在窗口内增加 → 已确认
+      ③ 窗口内出现**新增**的"上传失败/文件过大"类文案 → 自动重试一次，仍失败 → UploadFailed
+      ④ 既未确认、也无任何错误信号（多半是选择器变了）→ 返回 False，由等待阶段用短窗口兜底
+    只有出现明确错误文案才重试——否则一次误判就会给同一篇挂上两个附件。
+    """
+    if not os.path.exists(pdf_path):
+        raise UploadFailed(f"找不到 PDF：{pdf_path}")
+
+    hits_before = _upload_error_hits(page)
+    if n_before is None:
+        n_before = _composer_pdf_count(page)
+
+    try:
+        _upload_pdf(page, pdf_path, say=say)
+    except Exception as e:
+        raise UploadFailed(f"上传动作失败：{repr(e)[:120]}")
+
+    if _wait_attachment_confirm(page, n_before, timeout=wait):
+        say("挂载检测：已确认 PDF 进入输入区")
+        return True
+
+    new_err = _upload_error_hits(page) - hits_before
+    if not new_err:
+        say("挂载检测：未能确认附件（输入区读不到文件名），按「无法确认」继续（等待阶段用较短超时）")
+        return False
+
+    say(f"挂载检测：发现上传错误提示 {sorted(new_err)[:2]}，自动重试一次")
+    n2 = _composer_pdf_count(page)
+    try:
+        _upload_pdf(page, pdf_path, say=say)
+    except Exception as e:
+        raise UploadFailed(f"重试上传失败：{repr(e)[:120]}")
+    if _wait_attachment_confirm(page, n2, timeout=wait):
+        say("挂载检测：重试后已确认挂载")
+        return True
+    raise UploadFailed(f"PDF 未能挂载（页面提示：{'、'.join(sorted(new_err)[:2])}）")
+
+
 def _enable_deep_think(page, say=lambda m: None):
     """确保「深度思考」开启。DeepSeek 用 div.ds-toggle-button，
     激活态 class 含 `ds-toggle-button--selected`。"""
@@ -531,11 +652,52 @@ def _strip_html_greeting(h):
     return h
 
 
-def _wait_answer_html(page, timeout=300, say=lambda m: None, stop_check=None):
+# 「生成中」的标志：可见的"停止生成/停止回答"按钮，或明显的 loading 指示。
+# 宁可漏判（退化成长时间等待），也不能恒为真——否则卡住检测永不触发。
+_GEN_SELS = (
+    "button:has-text('停止生成')",
+    "button:has-text('停止回答')",
+    "button:has-text('停止')",
+    "[aria-label*='停止']",
+    "[aria-label*='stop generat' i]",
+    "button[aria-label*='stop' i]",
+    "[class*='stop-generat']",
+    "[class*='ds-loading']",
+)
+
+
+def _is_generating(page):
+    """页面是否仍在生成中（存在可见的"停止"按钮 / loading 指示）。"""
+    for sel in _GEN_SELS:
+        try:
+            loc = page.locator(sel)
+            n = min(loc.count(), 3)
+        except Exception:
+            continue
+        for i in range(n):
+            try:
+                if loc.nth(i).is_visible():
+                    return True
+            except Exception:
+                continue
+    return False
+
+
+def _wait_answer_html(page, timeout=300, say=lambda m: None, stop_check=None,
+                      idle_timeout=240, idle_timeout_unconfirmed=90, unconfirmed=False):
     """等待并返回网页端**正式回答**的 HTML（保留标题/表格/列表）。
 
     基准：记录"发送前最后一个回答容器的 HTML"，之后只认与基准不同且非空的内容，
     避免把历史回答或深度思考的思维链误当本次答案。
+
+    卡住检测（2026-09-27 新增，用来区分「慢」和「卡死」）：
+      内容停止增长满 idle_limit 秒，且页面**没有**"生成中"迹象、消息块也没再新增
+      → 判定卡住，立刻抛 StalledError 交给上层跳过，不再干等到 timeout。
+      仍在生成时只刷新计时（深度思考可能长时间不吐正文，不会误杀慢的篇目）。
+      unconfirmed=True（PDF 挂载没能确认）时先用更短的 idle_timeout_unconfirmed——
+      但**只在这个文件从头到尾毫无动静时**才用它；一旦出现过任何内容增长、或消息块
+      有新增（说明请求确实发出去了），立刻切回正常窗口，避免"选择器失效 + 生成中
+      标志也失效"的双重失效下把慢篇目误判成卡住。
     stop_check: 可选回调，返回 True 时立即中断（每 1.5s 检查一次）。
     """
     page.wait_for_timeout(1000)
@@ -547,9 +709,14 @@ def _wait_answer_html(page, timeout=300, say=lambda m: None, stop_check=None):
         except Exception:
             base = ""
 
-    deadline = time.time() + timeout
+    idle_first = (idle_timeout_unconfirmed if unconfirmed else idle_timeout) or 0
+    idle_after = idle_timeout or idle_first
+    deadline = time.time() + max(1, timeout)
     html = ""
     stable = 0
+    msg_seen = _chat_msg_count(page)
+    got_signal = False      # 是否出现过"请求确实发出去了"的迹象（内容增长 / 消息块新增）
+    last_progress = time.time()
     while time.time() < deadline:
         if stop_check and stop_check():
             say("收到停止指令，中断等待")
@@ -563,19 +730,48 @@ def _wait_answer_html(page, timeout=300, say=lambda m: None, stop_check=None):
                 h = node.inner_html() or ""
             except Exception:
                 h = ""
+        progressed = False
         if h and h != base and len(h) > len(html):
             html = h
             stable = 0
+            progressed = True
         elif html and h == html:
             stable += 1
         if html and stable >= 3:
             say("网页端回答已稳定（HTML）")
             return _strip_html_greeting(_clean_answer_html(html))
+
+        if progressed:
+            got_signal = True
+            last_progress = time.time()
+        elif idle_first:
+            limit = idle_first if not got_signal else idle_after
+            idle_for = int(time.time() - last_progress)
+            if idle_for >= limit:
+                # 豁免判据：页面仍在生成，或消息块有新增（说明请求确实发出去了）
+                busy = False
+                try:
+                    cur = _chat_msg_count(page)
+                    if cur > msg_seen:
+                        msg_seen = cur
+                        got_signal = True
+                        busy = True
+                    if _is_generating(page):
+                        busy = True
+                except Exception:
+                    busy = False
+                if busy:
+                    say(f"已 {idle_for}s 无新内容，但页面仍在生成，继续等待…")
+                    last_progress = time.time()
+                else:
+                    raise StalledError(
+                        f"已 {idle_for}s 既无新内容、页面也无生成中迹象，判定卡住"
+                        f"（可能是附件未挂载 / 发送被忽略 / 网页端无响应）")
         page.wait_for_timeout(1500)
     if html:
         say("达到超时但已抓到部分回答")
         return _strip_html_greeting(_clean_answer_html(html))
-    raise RuntimeError("未能抓到网页端回答（可能未生成或选择器失效）。")
+    raise StalledError("等待超时且未抓到任何回答内容（可能未生成或选择器失效）。")
 
 
 
@@ -734,20 +930,41 @@ class WebChatSession:
         _ensure_logged_in(self.page, headless=self.headless, say=self.log)
         return self
 
-    def ask(self, pdf_path, prompt, title="", timeout=1800, stop_check=None):
+    def ask(self, pdf_path, prompt, title="", timeout=1800, stop_check=None,
+            idle_timeout=None, idle_timeout_unconfirmed=None, upload_wait=None):
+        """上传 PDF → 发送指令 → 抓取回答 HTML。
+
+        返回值含义不变（HTML 字符串）。新增的挂载检测/卡住检测只在**明确失败**时抛
+        UploadFailed / StalledError，两者都带 .kind，供批量任务分类统计并跳过当前文件。
+        idle_timeout / idle_timeout_unconfirmed / upload_wait 为 None 时读设置。
+        """
+        from .config import pdf_wait_timeouts
+        _tw = pdf_wait_timeouts()
+        idle_timeout = _tw["idle_timeout"] if idle_timeout is None else idle_timeout
+        idle_timeout_unconfirmed = (_tw["idle_timeout_unconfirmed"]
+                                    if idle_timeout_unconfirmed is None else idle_timeout_unconfirmed)
+        upload_wait = _tw["upload_wait"] if upload_wait is None else upload_wait
+
         p = self.page
+        if p is None:
+            raise WebChatError("浏览器会话未启动，请先 open()")
         prev_url, self.last_chat_url = self.last_chat_url, None
         _delete_previous_chat(p, say=self.log, prev_url=prev_url)
         _maybe_new_chat(p, say=self.log, base_url=self.url)
         # 洁净守卫（与单篇一致）：软开新对话后验证对话为空，否则硬导航重建
         if not _ensure_fresh_chat(p, self.url, say=self.log):
-            raise RuntimeError("无法进入全新对话，跳过本篇（避免读到旧对话的附件）")
+            raise WebChatError("无法进入全新对话，跳过本篇（避免读到旧对话的附件）")
         _enable_deep_think(p, say=self.log)
+        # 上传 + 挂载确认（只有明确失败才抛 UploadFailed；无法确认不算失败）
         n_before = _composer_pdf_count(p)
-        _upload_pdf(p, pdf_path, say=self.log)
+        confirmed = _upload_and_confirm(p, pdf_path, n_before=n_before, say=self.log,
+                                        wait=upload_wait)
         _verify_attachment(p, pdf_path, n_before=n_before, say=self.log)
         _send_prompt(p, prompt, say=self.log)
-        html = _wait_answer_html(p, timeout=timeout, say=self.log, stop_check=stop_check)
+        html = _wait_answer_html(p, timeout=timeout, say=self.log, stop_check=stop_check,
+                                 idle_timeout=idle_timeout,
+                                 idle_timeout_unconfirmed=idle_timeout_unconfirmed,
+                                 unconfirmed=not confirmed)
         # 记录本轮会话 URL，供下一轮删除
         try:
             if "/a/chat/s/" in (p.url or ""):
@@ -755,6 +972,37 @@ class WebChatSession:
         except Exception:
             pass
         return html
+
+    def recover(self):
+        """上一轮卡住/失败后恢复会话，防止后续篇目连锁失败。
+
+        先软恢复（回首页 + 新建对话，不动浏览器进程）；软恢复无效（页面已崩、
+        上下文失效）再重启整个浏览器上下文。
+        返回 True 表示已恢复可用状态（批量据此决定继续或放弃后续篇目）。
+        """
+        try:
+            p = self.page
+            if p is None:
+                raise WebChatError("page 为空")
+            p.goto(self.url, wait_until="domcontentloaded", timeout=30000)
+            p.wait_for_timeout(1500)
+            _ensure_logged_in(p, headless=self.headless, say=self.log)
+            if not _ensure_fresh_chat(p, self.url, say=self.log):
+                raise WebChatError("软恢复后仍拿不到空对话")
+            self.last_chat_url = None
+            self.log("会话已恢复（软恢复：新建对话）")
+            return True
+        except Exception as e:
+            self.log(f"软恢复失败（{repr(e)[:80]}），改为重启浏览器…")
+        try:
+            self.close()
+            self.open()
+            self.last_chat_url = None
+            self.log("会话已恢复（已重启浏览器）")
+            return True
+        except Exception as e2:
+            self.log(f"重启浏览器失败：{repr(e2)[:140]}")
+            return False
 
     def close(self):
         try:
@@ -769,6 +1017,7 @@ class WebChatSession:
             pass
         self._ctx = None
         self._pw = None
+        self.page = None
 
 
 # ==================== 纯文本会话（不上传文件，长文分章用） ====================

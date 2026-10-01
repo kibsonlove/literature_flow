@@ -53,6 +53,17 @@ $("settingsBtn").onclick = async () => {
       $("model").value = s.model || "";
       $("baseUrl").value = s.base_url || "";
       $("openalexKey").value = s.openalex_key || "";
+      $("researchQuestion").value = s.research_question || "";
+      // 精读阈值：输入框回填"用户填过的值"，placeholder 显示当前生效值（留空=用默认）
+      const w = s.pdf_wait || {}, wr = s.pdf_wait_raw || {};
+      $("pdfIdleTimeout").value = wr.idle_timeout || "";
+      $("pdfIdleTimeout").placeholder = String(w.idle_timeout || 240);
+      $("pdfIdleTimeoutUnconfirmed").value = wr.idle_timeout_unconfirmed || "";
+      $("pdfIdleTimeoutUnconfirmed").placeholder = String(w.idle_timeout_unconfirmed || 90);
+      $("pdfUploadWait").value = wr.upload_wait || "";
+      $("pdfUploadWait").placeholder = String(w.upload_wait || 20);
+      $("pdfJobTimeout").value = wr.job_timeout || "";
+      $("pdfJobTimeout").placeholder = String(w.job_timeout || 1800);
       await loadPathsInto();
       await loadEmbeddingInto();
       await loadMineruInto();
@@ -103,6 +114,13 @@ $("saveSettings").onclick = async () => {
       model: $("model").value.trim(),
       base_url: $("baseUrl").value.trim(),
       openalex_key: $("openalexKey").value.trim(),
+      research_question: $("researchQuestion").value,
+      pdf_wait: {
+        idle_timeout: $("pdfIdleTimeout").value.trim(),
+        idle_timeout_unconfirmed: $("pdfIdleTimeoutUnconfirmed").value.trim(),
+        upload_wait: $("pdfUploadWait").value.trim(),
+        job_timeout: $("pdfJobTimeout").value.trim(),
+      },
     });
     const p = await postJSON("/api/paths", {
       zotero_data_dir: $("zoteroDataDir").value.trim(),
@@ -210,12 +228,17 @@ $("installChromium").onclick = async () => {
   }
 };
 
-// ---- 首次运行引导：缺必填配置时给横幅，而不是等用户撞报错 ----
+// ---- 首次运行引导：缺必填配置 / Zotero 拉不起来时给横幅，而不是等用户撞报错 ----
+let setupBannerClosed = false;   // 用户点过「稍后」，本次会话不再打扰
+
 async function refreshSetupBanner() {
   const el = $("setupBanner");
+  if (setupBannerClosed) return;
   try {
     const s = await (await fetch("/api/setup/status")).json();
-    if (!s.needs_setup) { el.classList.add("hidden"); return; }
+    // Zotero 自动启动失败不阻塞使用，但必填项之外也该说一句：
+    // 版本不匹配的报错只出现在 Zotero 自己的弹窗里，不说用户根本不知道为什么每次都要更新。
+    if (!s.needs_setup && !s.zotero_launch_failed) { el.classList.add("hidden"); return; }
     $("setupList").innerHTML = (s.items || []).filter((i) => !i.ok).map((i) =>
       `<li><b>${i.label}</b>：${i.hint} <span class="muted">（${i.where}）</span></li>`).join("");
     el.classList.remove("hidden");
@@ -227,8 +250,12 @@ $("setupOpenBtn").onclick = () => {
   if (p.classList.contains("hidden")) $("settingsBtn").click();
   p.scrollIntoView({ behavior: "smooth", block: "start" });
 };
-$("setupLaterBtn").onclick = () => $("setupBanner").classList.add("hidden");
+$("setupLaterBtn").onclick = () => { setupBannerClosed = true; $("setupBanner").classList.add("hidden"); };
 refreshSetupBanner();
+// 拉起 Zotero 是在后台线程里做的（最长等 60s），结果晚于首屏；迟一点各看一次，
+// 免得用户还得手动刷新页面才知道 Zotero 为什么没起来。
+setTimeout(refreshSetupBanner, 15000);
+setTimeout(refreshSetupBanner, 65000);
 
 // ---- 后端切换：显示/隐藏网页端地址 ----
 document.querySelectorAll("input[name=backend]").forEach((r) => {
@@ -731,14 +758,23 @@ function renderBatchResults(rows) {
     ? BATCH_CANDS.map((c) => ({ ...c, status: "pending", ...(done[c.key] || {}) }))
     : (rows || []);
   let html = "<thead><tr><th>状态</th><th>标题</th><th>分类</th><th>用时</th><th>标签</th></tr></thead><tbody>";
-  const SKIPPED_LABEL = { skipped: "学位论文", already_noted: "已有笔记", no_pdf: "无 PDF" };
+  const SKIPPED_LABEL = {
+    skipped: "学位论文", already_noted: "已有笔记", no_pdf: "无 PDF",
+    bad_pdf: "PDF 不可用", upload_failed: "PDF 挂载失败", stalled: "生成卡住",
+  };
+  // 需要人工关注的（区别于"正常跳过"）：单独给 ✗ 徽标 + 说明，便于批量跑完后按行排查
+  const PROBLEM_LABEL = {
+    error: "报错", bad_pdf: "PDF 不可用", upload_failed: "PDF 挂载失败", stalled: "生成卡住",
+  };
   list.forEach((r) => {
     let badge = "";
     if (r.status === "ok") badge = '<span class="badge ok">✓</span>';
-    else if (r.status === "error") badge = '<span class="badge new">✗</span>';
+    else if (PROBLEM_LABEL[r.status]) badge = `<span class="badge new" title="${PROBLEM_LABEL[r.status]}">✗</span>`;
     else if (r.status !== "pending") badge = `<span class="muted" title="${SKIPPED_LABEL[r.status] || "跳过"}">⤼</span>`;
     const catCell = r.status === "already_noted" ? '<span class="muted">已有笔记，跳过</span>'
-      : escapeHtml(r.category || "");
+      : (PROBLEM_LABEL[r.status]
+        ? `<span class="muted">${PROBLEM_LABEL[r.status]}，已跳过</span>`
+        : escapeHtml(r.category || ""));
     const title = r.title || "";
     html += `<tr><td>${badge}</td><td class="ps-title">${escapeHtml(title)}</td>`
       + `<td>${catCell}</td>`
@@ -1054,8 +1090,9 @@ $("longdocStatusBtn").onclick = refreshLongdoc;
 
 // ================= 文献检索（OpenAlex + arXiv，含引文追踪与批量入库） =================
 let litResults = [];   // 当前结果集（检索 + 引文追踪合并后）
-let litSlug = "";      // 当前载入的主题 slug，保存时用于覆盖同名主题
-let litAutoLoaded = false;   // 首次打开面板自动载入最近主题，只做一次
+let litEditSlug = "";  // 「读取」进来的配置 slug：决定「存为」是覆盖它、还是新建一份
+let litEditName = "";  // 读取时的配置名，用来判断用户有没有改过名（改名 = 另存，不动原来那份）
+let litAutoLoaded = false;   // 首次打开面板自动读入最近的配置，只做一次
 let litRestored = false;     // 首次打开面板从本地恢复上次结果，只做一次
 let litRestoredPicks = null; // 待恢复的勾选（存 data-i 字符串），在 litDraw() 之后再套用
 
@@ -1115,7 +1152,11 @@ $("litBtn").onclick = async () => {
     $("litStatus").textContent = `当前 ${litResults.length} 条结果`;
   } else {
     const t = litPickedTopic();
-    if (t) $("litStatus").textContent = `已载入主题「${t.name}」，点「检索」开始`;
+    if (t) {
+      // 报出条数很重要：检索式框只显示得下约 4 行，不报数会让人以为只有这几条
+      const n = $("litQueries").value.split("\n").filter((s) => s.trim()).length;
+      $("litStatus").textContent = `已读入配置「${t.name}」（${n} 条检索式），点「检索」开始`;
+    }
   }
 };
 $("litClose").onclick = () => $("litPanel").classList.add("hidden");
@@ -1124,9 +1165,10 @@ function litForm() {
   const sources = [];
   if ($("litSrcOA").checked) sources.push("openalex");
   if ($("litSrcAX").checked) sources.push("arxiv");
+  // 注意：这里不带 slug。存到哪一份由「存为」当场决定（同名覆盖 / 改过名则另存），
+  // 不再让一个"上次读取过的 slug"在背后静默决定覆盖谁——那正是配置被改岔的根源。
   return {
     name: $("litName").value.trim(),
-    slug: litSlug,
     queries: $("litQueries").value.split("\n").map((s) => s.trim()).filter(Boolean),
     since: $("litSince").value.trim(),
     sources: sources,
@@ -1140,10 +1182,10 @@ async function loadLitTopics() {
   try {
     const list = await (await fetch("/api/lit/topics")).json();
     const arr = list || [];
-    $("litTopicSel").innerHTML = '<option value="">（未选择主题）</option>' +
+    $("litTopicSel").innerHTML = '<option value="">（未选择配置）</option>' +
       arr.map((t, i) => `<option value="${i}">${escapeHtml(t.name)}</option>`).join("");
     $("litTopicSel").dataset.list = JSON.stringify(arr);
-  } catch (e) { /* 主题列表读不到不影响检索功能 */ }
+  } catch (e) { /* 配置列表读不到不影响检索功能 */ }
 }
 
 function litPickedTopic() {
@@ -1151,10 +1193,20 @@ function litPickedTopic() {
   return list[parseInt($("litTopicSel").value, 10)];
 }
 
-// 把一个主题配置填进表单（载入主题 / 打开面板自动载入 共用）
+// 折叠摘要右侧常驻显示「存为」会落到哪一份，避免又出现静默覆盖
+function litCfgState() {
+  const el = $("litCfgState");
+  if (!el) return;
+  el.textContent = litEditSlug
+    ? `正在编辑「${litEditName}」，存为 = 覆盖它`
+    : "未读取配置，存为 = 新建一份";
+}
+
+// 把一个配置填进表单（读取配置 / 打开面板自动读入 共用）
 function litApplyTopic(t) {
   if (!t) return false;
-  litSlug = t.slug || "";
+  litEditSlug = t.slug || "";
+  litEditName = t.name || "";
   $("litName").value = t.name || "";
   $("litSince").value = t.since || "";
   $("litPer").value = t.per_page || 100;
@@ -1164,36 +1216,51 @@ function litApplyTopic(t) {
   $("litSrcOA").checked = src.indexOf("openalex") >= 0;
   $("litSrcAX").checked = src.indexOf("arxiv") >= 0;
   if (t.sort && $("litSort").querySelector(`option[value="${t.sort}"]`)) $("litSort").value = t.sort;
+  litCfgState();
   return true;
 }
 
 $("litTopicLoad").onclick = () => {
   const t = litPickedTopic();
-  if (!t) { $("litStatus").textContent = "请先在下拉框里选一个主题"; return; }
+  if (!t) { $("litStatus").textContent = "请先在下拉框里选一个配置"; return; }
   litApplyTopic(t);
-  $("litStatus").textContent = `已载入主题「${t.name}」（${(t.queries || []).length} 条检索式），点「检索」开始`;
+  $("litStatus").textContent = `已读入配置「${t.name}」（${(t.queries || []).length} 条检索式），点「检索」开始`;
 };
 
 $("litTopicSave").onclick = async () => {
   const form = litForm();
-  if (!form.name) { $("litStatus").textContent = "请先填写主题名"; return; }
+  if (!form.name) { $("litStatus").textContent = "请先填写配置名"; return; }
   if (!form.queries.length) { $("litStatus").textContent = "请先填写至少一条检索式"; return; }
+
+  // 覆盖还是新建：改过名 = 另存一份（原配置保持不动）；没改名且是读取来的 = 覆盖那一份
+  const renamed = litEditSlug && form.name !== litEditName;
+  const overwrite = Boolean(litEditSlug) && !renamed;
+  if (renamed) {
+    const clash = JSON.parse($("litTopicSel").dataset.list || "[]")
+      .find((x) => x.name === form.name && x.slug !== litEditSlug);
+    if (clash && !confirm(`已存在同名配置「${form.name}」，继续会覆盖它。\n是否继续？`)) return;
+  }
   try {
-    const t = await postJSON("/api/lit/topics", form);
-    litSlug = t.slug || "";
-    $("litStatus").textContent = `主题「${t.name}」已保存到本机`;
+    const t = await postJSON("/api/lit/topics",
+      Object.assign({}, form, { slug: overwrite ? litEditSlug : "" }));
+    litEditSlug = t.slug || "";
+    litEditName = t.name || "";
+    litCfgState();
+    $("litStatus").textContent = overwrite
+      ? `配置「${t.name}」已更新（覆盖原文件）`
+      : `配置「${t.name}」已存为新的一份`;
     loadLitTopics();
   } catch (e) { $("litStatus").textContent = "保存失败：" + e.message; }
 };
 
 $("litTopicDel").onclick = async () => {
   const t = litPickedTopic();
-  if (!t) { $("litStatus").textContent = "请先在下拉框里选一个主题"; return; }
-  if (!confirm(`删除检索主题「${t.name}」？\n只删检索配置，不影响 Zotero 里已入库的文献。`)) return;
+  if (!t) { $("litStatus").textContent = "请先在下拉框里选一个配置"; return; }
+  if (!confirm(`删除检索配置「${t.name}」？\n只删检索配置，不影响 Zotero 里已入库的文献。`)) return;
   try {
     await postJSON("/api/lit/topics/delete", { slug: t.slug });
-    if (litSlug === t.slug) litSlug = "";
-    $("litStatus").textContent = "主题已删除";
+    if (litEditSlug === t.slug) { litEditSlug = ""; litEditName = ""; litCfgState(); }
+    $("litStatus").textContent = "配置已删除";
     loadLitTopics();
   } catch (e) { $("litStatus").textContent = "删除失败：" + e.message; }
 };
@@ -1227,6 +1294,78 @@ function litShowError(html) {
   w.innerHTML = html;
   w.classList.remove("hidden");
 }
+
+// 「生成检索式」的局部提示：写在按钮旁边，别丢到下面第 3 步的状态栏去——离点击处隔着一整个
+// 文本框和两段步骤标题，用户很容易以为"点了没反应"（2026-09-30 反馈）。
+function litGenSay(msg, ok) {
+  const el = $("litGenHint");
+  if (!el) return;
+  el.textContent = msg || "";
+  el.classList.toggle("ok", Boolean(ok));
+}
+
+// 「生成检索式」：把研究方向交给用户在「设置」里自己配的模型，产出几条规范检索式。
+// 生成完**不自动检索** —— 模型写歪了就直接跑一轮是白花额度，必须等用户复核后再点「检索」。
+$("litGenBtn").onclick = async () => {
+  const topic = $("litGenTopic").value.trim();
+  if (!topic) {
+    litGenSay("先在这里填一句研究方向，再点生成");
+    $("litGenTopic").focus();
+    return;
+  }
+  const cur = $("litQueries").value.split("\n").map((s) => s.trim()).filter(Boolean);
+  const btn = $("litGenBtn");
+  btn.disabled = true;
+  litGenSay("正在通过网页端生成…（会弹出一个浏览器窗口自动操作，约 30–90 秒，不消耗 API 额度；请勿关闭那个窗口）");
+  try {
+    const r = await postJSON("/api/lit/gen_queries", { topic: topic, count: 4 });
+    const got = r.queries || [];
+    if (!got.length) { litGenSay("模型没返回可用的检索式，换个说法再试"); return; }
+    const merged = cur.concat(got.filter((q) => cur.indexOf(q) < 0));
+    const ta = $("litQueries");
+    ta.value = merged.join("\n");
+    ta.scrollTop = ta.scrollHeight;   // 新增的行在末尾：文本框只显示约 4 行，不滚过去用户会以为没反应
+    litGenSay(`已生成 ${got.length} 条，已追加到文本框末尾（现共 ${merged.length} 条）—— 请复核后再点「检索」`, true);
+  } catch (e) {
+    litGenSay("生成失败：" + e.message);
+  } finally {
+    btn.disabled = false;
+  }
+};
+
+// 手工改检索式后，把上一次的生成提示收掉，免得看着像"提示还停在那儿"
+$("litQueries").addEventListener("input", () => litGenSay(""));
+
+// 清空检索式：**不用 confirm()** —— WorkBuddy 内置预览这类嵌入式 webview 常把 JS 弹窗整个拦掉，
+// 表现就是"点了没反应"（confirm 一律返回 false / 直接吞掉）。改成两段式：第一次点把按钮变成
+// 「确认清空？再点一次」，5 秒内再点才真清；超时或改了文本框就自动复位。
+let litClearArm = null;
+$("litClearQueries").onclick = () => {
+  const ta = $("litQueries");
+  const btn = $("litClearQueries");
+  const cur = ta.value.split("\n").map((s) => s.trim()).filter(Boolean);
+  if (!cur.length) { litGenSay("文本框本来就是空的"); return; }
+  if (!btn.dataset.armed) {
+    btn.dataset.armed = "1";
+    btn.textContent = "确认清空？再点一次";
+    btn.classList.add("lit-clear-arm");
+    litGenSay("再点一次「确认清空」才会真的清空（5 秒内有效）");
+    litClearArm = setTimeout(() => {
+      delete btn.dataset.armed;
+      btn.textContent = "清空";
+      btn.classList.remove("lit-clear-arm");
+      litGenSay("");
+    }, 5000);
+    return;
+  }
+  clearTimeout(litClearArm);
+  delete btn.dataset.armed;
+  btn.textContent = "清空";
+  btn.classList.remove("lit-clear-arm");
+  ta.value = "";
+  litGenSay("检索式已清空", true);
+  ta.focus();
+};
 
 $("litRun").onclick = async () => {
   const form = litForm();

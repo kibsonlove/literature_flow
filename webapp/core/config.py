@@ -31,6 +31,15 @@ EMBEDDING_DEFAULTS = {
     "model": "BAAI/bge-m3",
 }
 
+# 精读（网页端）的「挂载确认 / 卡住检测」阈值规格。
+#   返回键 -> (settings.json 里的键, 默认值, 下限, 上限)  单位：秒
+_PDF_WAIT_SPEC = {
+    "idle_timeout":             ("pdf_idle_timeout",             240,  30,  7200),
+    "idle_timeout_unconfirmed": ("pdf_idle_timeout_unconfirmed",  90,  30,  3600),
+    "upload_wait":              ("pdf_upload_wait",               20,   5,   300),
+    "job_timeout":              ("pdf_job_timeout",             1800,  60, 21600),
+}
+
 
 def _placeholder(v):
     """是否为"未填写"的占位值：空串、纯空白，或模板里残留的中文提示语。
@@ -91,7 +100,48 @@ def openalex_key():
     return "" if _placeholder(k) else k
 
 
-def save_settings(api_key=None, model=None, base_url=None, openalex_key=None):
+def pdf_wait_timeouts():
+    """精读（网页端）的挂载确认与卡住检测阈值（秒）。
+
+    返回 {idle_timeout, idle_timeout_unconfirmed, upload_wait, job_timeout}。
+    缺省用 _PDF_WAIT_SPEC 的默认值；范围夹取，避免填 0 导致「永不判卡住」。
+    用函数读而非模块级常量：界面里改完即生效，无需重启。
+    """
+    d = _read_json(SETTINGS_PATH)
+    out = {}
+    for name, (key, dv, lo, hi) in _PDF_WAIT_SPEC.items():
+        try:
+            v = int(float(str(d.get(key, "")).strip()))
+        except Exception:
+            v = dv
+        out[name] = max(lo, min(hi, v))
+    return out
+
+
+def research_question():
+    """用户的研究课题 / 研究问题（精读笔记里「与我课题的相关性」拿它做对照）。
+
+    存 settings.json 的 research_question 字段；未填返回空串——调用方必须保留"占位说明"
+    的行为，**绝不能让模型凭空推测相关性**（那是编造）。
+    """
+    return (_read_json(SETTINGS_PATH).get("research_question") or "").strip()
+
+
+def pdf_wait_raw():
+    """settings.json 里**用户显式填过**的精读阈值（空串 = 用默认，由 pdf_wait_timeouts 兜底）。
+
+    界面回填用这个而不是生效值：否则"清空输入框想恢复默认"会看起来像改了没反应。
+    """
+    d = _read_json(SETTINGS_PATH)
+    out = {}
+    for name, (key, _dv, _lo, _hi) in _PDF_WAIT_SPEC.items():
+        v = d.get(key)
+        out[name] = "" if v is None else v
+    return out
+
+
+def save_settings(api_key=None, model=None, base_url=None, openalex_key=None, pdf_wait=None,
+                  research_question=None):
     d = _read_json(SETTINGS_PATH)
     for k in ("has_key", "api_key_masked", "has_openalex_key", "openalex_key_masked"):
         d.pop(k, None)
@@ -103,6 +153,18 @@ def save_settings(api_key=None, model=None, base_url=None, openalex_key=None):
         d["base_url"] = base_url.strip() or DEFAULTS["base_url"]
     if openalex_key is not None:
         d["openalex_key"] = openalex_key.strip()
+    if research_question is not None:
+        # 空串 = 清空课题，回到占位说明（不是"忽略"）
+        d["research_question"] = research_question.strip()
+    if pdf_wait:
+        for name, (key, dv, lo, hi) in _PDF_WAIT_SPEC.items():
+            raw = pdf_wait.get(name)
+            if raw is None or str(raw).strip() == "":
+                continue
+            try:
+                d[key] = max(lo, min(hi, int(float(str(raw).strip()))))
+            except Exception:
+                continue
     _write_json(SETTINGS_PATH, d)
     return load_settings()
 

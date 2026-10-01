@@ -611,6 +611,107 @@ def download_pdf(url, dest_dir, timeout=60, max_mb=40):
         return None, repr(e)[:120]
 
 
+# ---------- 检索式生成（LLM） ----------
+
+_GEN_SYSTEM = (
+    "你是科技文献检索专家，熟悉 OpenAlex 与 arXiv 的布尔检索语法。"
+    "你只输出检索式本身，不输出任何解释、编号或 Markdown 标记。"
+)
+
+_GEN_PROMPT = """研究方向：{topic}
+
+请写出 {n} 条英文布尔检索式，用于 OpenAlex 的 title_and_abstract.search（同一条会被翻译成 arXiv 语法复用）。
+
+要求：
+1. 一条一行，直接输出检索式本身——不要编号、不要项目符号、不要解释、不要空行。
+2. 支持 AND / OR / NOT；多词短语用英文双引号包起来。
+3. 每条都要含该方向公认的英文专有短语作为必需项，不要用过于宽泛的单词（如 model、method、data、study）。
+4. {n} 条各聚焦不同侧面（例如方法、任务、评测、应用场景），彼此独立、合起来覆盖该方向；
+   不要把全部内容 OR 成一条超长式，也不要写成彼此几乎相同的样子。
+5. 只用英文。"""
+
+
+def _clean_queries(text, n, strict=True):
+    """把模型输出整理成检索式列表。
+
+    模型习惯在前后加寒暄、编号、项目符号、代码围栏，所以逐行清洗：
+      1. 反复剥掉叠加的编号与项目符号（如 "2. - xxx"、"* 3) xxx"）；
+      2. 去掉行首尾的反引号 / 围栏；
+      3. strict 模式下只保留"像检索式"的行——含双引号短语或布尔算子；
+         实测模型爱写 "Here are the queries:" 这类引导句，不放行会污染检索式。
+         strict=False 是兜底：宁松勿空，避免过滤过狠导致一条都不剩。
+    """
+    out = []
+    for raw in (text or "").splitlines():
+        s = raw.strip()
+        if not s or s.startswith("```"):
+            continue
+        for _ in range(3):                               # 编号与项目符号可能叠加
+            s2 = re.sub(r"^\d+\s*[.)、:：]\s*", "", s)
+            s2 = re.sub(r"^[-*\u2022]\s*", "", s2)
+            if s2 == s:
+                break
+            s = s2
+        s = s.strip().strip("`").strip()
+        if not s or not re.search(r"[A-Za-z]", s):        # 丢掉纯中文/空的残行
+            continue
+        if strict and not (('"' in s) or re.search(r"\b(ANDNOT|AND|OR|NOT)\b", s, re.I)):
+            continue
+        if s in out:
+            continue
+        out.append(s)
+        if len(out) >= max(1, int(n)):
+            break
+    return out
+
+
+def _html_to_text(h):
+    """网页端给的是回答 HTML 片段，转成纯文本再交给 _clean_queries（与 domain.py 同做法）。"""
+    import html as _html
+    t = re.sub(r"<(script|style)[\s\S]*?</\1>", " ", h or "", flags=re.I)
+    t = re.sub(r"<br\s*/?>|</p>|</div>|</li>|</h[1-6]>", "\n", t, flags=re.I)
+    t = re.sub(r"<[^>]+>", " ", t)
+    return _html.unescape(t)
+
+
+def generate_queries(topic, count=4, backend="webchat", log=None):
+    """按研究方向生成布尔检索式。
+
+    **默认走网页端**（`WebChatTextSession`：驱动已登录的浏览器会话，**零 API 费用**，
+    会打开一个浏览器窗口）；只有显式传 `backend="api"` 才走「设置」里的模型 API。
+    与 `domain.py` 的造包、`longdoc.py` 的长文精读保持同一套做法。
+
+    只产出文本：不落盘、不检索、不改 Zotero。失败时抛异常，由调用方转成可读提示。
+    """
+    say = log or (lambda m: None)
+    topic = (topic or "").strip()
+    if not topic:
+        raise ValueError("请先填写研究方向")
+    n = max(2, min(int(count or 4), 8))
+    prompt = _GEN_PROMPT.format(topic=topic, n=n)
+    mode = (backend or "webchat").strip().lower()
+
+    if mode == "api":
+        from .read import _llm_chat          # 延迟导入：本模块其余功能不依赖 openai
+        say("正在通过模型 API 生成检索式…")
+        text = _llm_chat(prompt, system=_GEN_SYSTEM, timeout=90)
+    else:
+        from .webchat import WebChatTextSession
+        say("正在通过网页端生成检索式（零 API 费用；会打开一个浏览器窗口自动操作，请勿关闭它）…")
+        s = WebChatTextSession(headless=False, log=say)
+        s.open()
+        try:
+            text = _html_to_text(s.ask(prompt, timeout=600))
+        finally:
+            try:
+                s.close()
+            except Exception:
+                pass
+
+    qs = _clean_queries(text, n)
+    return qs or _clean_queries(text, n, strict=False)
+
+
 # ---------- 入库 ----------
 
 def import_records(records, collection="", tags=None, fetch_pdf=False, log=None):

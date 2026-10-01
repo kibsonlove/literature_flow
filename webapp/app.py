@@ -18,7 +18,8 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from core.config import (
-    load_embedding, load_paths, load_settings, save_embedding, save_paths, save_settings,
+    load_embedding, load_paths, load_settings, pdf_wait_raw, pdf_wait_timeouts, save_embedding,
+    save_paths, save_settings,
 )
 from core.extract import pdf_to_text, pdf_path_from_zotero_key
 from core.read import read_paper, read_paper_webchat
@@ -72,7 +73,19 @@ def _on_startup():
 
 @app.get("/")
 def index():
-    return FileResponse(os.path.join(TEMPL, "index.html"))
+    """首页。静态资源带 **mtime 版本号**：改了 app.js / style.css 之后浏览器必定拉新版，
+    彻底告别「我明明改了，页面还是旧行为」（2026-09-30 反复踩：后端加了按钮处理函数，
+    用户页签里还是旧 JS，点了毫无反应）。HTML 本身也禁缓存，每次都重新校验。"""
+    path = os.path.join(TEMPL, "index.html")
+    with open(path, encoding="utf-8") as f:
+        html = f.read()
+    for name in ("app.js", "style.css"):
+        try:
+            v = int(os.stat(os.path.join(STATIC, name)).st_mtime)
+        except Exception:
+            v = 0
+        html = html.replace(f"/static/{name}", f"/static/{name}?v={v}")
+    return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
 
 
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
@@ -393,9 +406,37 @@ def lit_import(payload: dict):
     return r
 
 
+@app.post("/api/lit/gen_queries")
+def lit_gen_queries(payload: dict):
+    """按研究方向生成布尔检索式。
+
+    **默认走网页端**（驱动已登录的浏览器会话，零 API 费用）；payload 里传 backend="api"
+    才用「设置」里的模型 API。只生成文本、不检索、不写库；前端拿到后追加进检索式框由用户复核。
+
+    注意这里刻意用 `def` 而不是 `async def`：网页端走 Playwright **同步** API，不能出现在
+    事件循环里；Starlette 会把 `def` 路由丢进线程池，正好满足要求。
+    """
+    from core import litsearch
+    logs = []
+    try:
+        qs = litsearch.generate_queries(
+            payload.get("topic"), count=payload.get("count") or 4,
+            backend=payload.get("backend"), log=logs.append)
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        logging.exception("gen_queries 失败")
+        raise HTTPException(500, f"生成检索式失败：{repr(e)[:150]}")
+    return {"count": len(qs), "queries": qs, "log": logs}
+
+
 @app.get("/api/settings")
 def get_settings():
-    return load_settings()
+    s = load_settings()
+    # 精读的挂载/卡住检测阈值（秒），供「设置 → 网页端精读」显示与修改
+    s["pdf_wait"] = pdf_wait_timeouts()   # 生效值（前端用作默认提示）
+    s["pdf_wait_raw"] = pdf_wait_raw()    # 用户填过的值（回填输入框，留空=用默认）
+    return s
 
 
 @app.post("/api/settings")
@@ -405,6 +446,8 @@ def post_settings(payload: dict):
         model=payload.get("model"),
         base_url=payload.get("base_url"),
         openalex_key=payload.get("openalex_key"),
+        pdf_wait=payload.get("pdf_wait"),
+        research_question=payload.get("research_question"),
     )
 
 
@@ -606,9 +649,11 @@ def setup_status():
     """首次运行体检：逐项判断配置是否可用，供界面显示引导横幅。"""
     from core import kb, zotero_detect
     from core.config import zotero_data_dir, zotero_exe
+    from core.zotero_launch import last_launch
 
     s = load_settings()
     ddir, exe = zotero_data_dir(), zotero_exe()
+    launch = last_launch()
 
     def _item(key, label, ok, where, hint, required=False, value=""):
         return {"key": key, "label": label, "ok": bool(ok), "where": where,
@@ -622,6 +667,12 @@ def setup_status():
               "填错会读不到 PDF", required=True, value=ddir),
         _item("zotero_exe", "Zotero 程序路径", bool(exe) and os.path.isfile(exe),
               "设置 → 本机路径", "只影响自动拉起 Zotero，可留空", value=exe),
+        # 自动拉起 Zotero 的结果：不阻塞使用，但失败时必须说出来——
+        # 版本不匹配这类原因的报错只在 Zotero 自己的弹窗里，日志里看不到（2026-09-30 踩过）。
+        _item("zotero_launch", "Zotero 自动启动", launch["state"] != "failed",
+              "设置 → 本机路径",
+              launch["message"] or "启动时若 Zotero 未运行会自动拉起，暂无结论",
+              value=launch.get("exe") or ""),
         _item("embedding", "知识库向量模型", kb.embedding_available(), "设置 → 知识库",
               "只影响语义检索，可留空"),
     ]
@@ -634,6 +685,7 @@ def setup_status():
         "missing": [i["key"] for i in items if not i["ok"]],
         "needs_setup": any(not i["ok"] and i["required"] for i in items),
         "zotero_running": running,
+        "zotero_launch_failed": launch["state"] == "failed",
     }
 
 
