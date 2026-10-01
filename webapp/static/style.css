@@ -1826,3 +1826,8 @@ summary svg { width: 1.05em; height: 1.05em; flex: none; }
   gap: var(--sp-2);
 }
 .ps-warn svg { flex: none; margin-top: 2px; }
+
+/* --------------------------------------------------------------------------
+   23. 历史任务头的批量清理按钮
+   -------------------------------------------------------------------------- */
+.hist-tools { margin-left: auto; display: flex; align-items: center; gap: var(--sp-2); }

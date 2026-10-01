@@ -12,6 +12,7 @@ import os
 import re
 import tempfile
 import threading
+import time
 
 import markdown as md
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
@@ -1056,17 +1057,37 @@ def _guess_type(title):
 #
 # 串行约束：网页端开的是同一个浏览器 profile，同一时刻只能跑一个任务，用 _AGENT 闸门保护。
 
-_AGENT = {"busy": False}
+_AGENT = {"busy": False, "task": None, "since": 0.0}
 _AGENT_GATE = threading.Lock()
 
 
-def _agent_bg(fn, *args):
-    """把一段 agent 工作丢到后台线程跑；同时只允许一个在跑（串行闸门）。"""
+def _agent_acquire(task_id=None):
+    """抢串行闸门。抢不到就报 409——**必须在建任务记录之前调用**。
+
+    踩过的坑：原来是"先 `new_task()` 建记录，再调 `_agent_bg()` 抢闸门"，
+    于是每次 409 都会留下一个永远停在 planning 的僵尸任务，用户看到的就是
+    "点了生成计划，再也没下文"。所以拆成"先抢闸门、再建档、最后派活"。
+    """
     with _AGENT_GATE:
         if _AGENT["busy"]:
-            raise HTTPException(409, "已有智能体任务正在执行（网页端浏览器通道只能串行），请先等它结束")
+            who = _AGENT.get("task") or "（未知）"
+            detail = ""
+            try:
+                t = _agent_mod().get_task(who) or {}
+                if t.get("task"):
+                    detail = "：「" + t["task"][:30] + "」"
+            except Exception:
+                pass
+            raise HTTPException(
+                409, f"已有任务正在执行（{who}{detail}）。网页端共用同一个浏览器通道，只能串行——"
+                     f"请等它结束，或先在面板上把它「中止」。")
         _AGENT["busy"] = True
+        _AGENT["task"] = task_id
+        _AGENT["since"] = time.time()
 
+
+def _agent_spawn(fn, *args):
+    """派活到后台线程（调用前必须先 `_agent_acquire()`）。"""
     def _work():
         try:
             fn(*args)
@@ -1075,8 +1096,13 @@ def _agent_bg(fn, *args):
         finally:
             with _AGENT_GATE:
                 _AGENT["busy"] = False
-
+                _AGENT["task"] = None
     threading.Thread(target=_work, daemon=True).start()
+
+
+def _agent_bg(fn, *args):
+    _agent_acquire(args[0] if args else None)
+    _agent_spawn(fn, *args)
 
 
 def _agent_mod():
@@ -1093,16 +1119,26 @@ def agent_tools_spec():
 
 @app.post("/api/agent/plan")
 def agent_plan(payload: dict):
-    """生成执行计划并落盘；立即返回任务号，计划在后台线程里出（前端轮询状态）。"""
+    """生成执行计划并落盘；立即返回任务号，计划在后台线程里出（前端轮询状态）。
+
+    注意顺序：**先抢串行闸门 → 再建任务记录 → 最后派活**。
+    反过来的话，闸门被占用时会在磁盘上留下一个永远停在 planning 的僵尸任务。
+    """
     AO = _agent_mod()
     text = (payload.get("task") or "").strip()
     if not text:
         raise HTTPException(400, "请先输入任务内容")
+    _agent_acquire()                      # 抢不到会 409，此时还没建任何记录
     try:
         t = AO.new_task(text, backend=payload.get("backend") or "webchat")
     except ValueError as e:
+        with _AGENT_GATE:
+            _AGENT["busy"] = False
+            _AGENT["task"] = None
         raise HTTPException(400, str(e))
-    _agent_bg(AO.plan_task, t["id"])
+    with _AGENT_GATE:
+        _AGENT["task"] = t["id"]
+    _agent_spawn(AO.plan_task, t["id"])
     return {"ok": True, "id": t["id"], "task": t}
 
 
@@ -1194,9 +1230,11 @@ def agent_status(id: str = ""):
     AO = _agent_mod()
     if not (id or "").strip():
         from core import agent_tools as A
-        return {"tasks": AO.list_tasks(), "busy": _AGENT["busy"], "tools": len(A.TOOLS)}
+        return {"tasks": AO.list_tasks(), "busy": _AGENT["busy"], "busy_task": _AGENT["task"],
+                "tools": len(A.TOOLS)}
     t = AO.get_task(id.strip())
     if not t:
         raise HTTPException(404, "任务不存在")
     t["busy"] = _AGENT["busy"]
+    t["busy_task"] = _AGENT["task"]
     return t

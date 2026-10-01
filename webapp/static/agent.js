@@ -353,7 +353,14 @@
       || t.status === "awaiting_confirm") {
       b.push(["replan", "ghost", "wand-sparkles", "重新生成计划"]);
     }
-    if (!b.length) return '<div class="plan-actions"><span class="muted">需要改动数据的话，再发一个新任务即可。</span></div>';
+    // 终态给个删除入口，免得失败/中止的残值一直堆在历史里
+    if (t.status === "done" || t.status === "failed" || t.status === "aborted") {
+      b.push(["delete", "ghost", "trash-2", "删除任务"]);
+    }
+    if (!b.length) {
+      if (t.status === "planning") return "";      // 出计划时别写"再发一个新任务"这种无关的话
+      return '<div class="plan-actions"><span class="muted">需要改动数据的话，再发一个新任务即可。</span></div>';
+    }
     var hint = "";
     if (t.status === "planned" || t.status === "aborted") {
       hint = '<span class="muted">不满意可以直接改单步参数，或整份重排</span>';
@@ -390,9 +397,12 @@
         + esc(STATUS_TEXT[t.status] || t.status) + "</span>"
         + '<span class="muted">' + steps.length + " 步"
         + (nDanger ? " · " + nDanger + " 步需确认" : "") + "</span></div></div>";
+      var empty = t.status === "planning"
+        ? "正在生成计划，请稍候（会打开一个浏览器窗口，约 30-60 秒）…"
+        : (t.error || "还没有步骤");
       var list = steps.length
         ? '<ol class="plan-steps">' + steps.map(function (s) { return stepHtml(s, t); }).join("") + "</ol>"
-        : '<div class="ps-empty">' + esc(t.error || "还没有步骤") + "</div>";
+        : '<div class="ps-empty">' + esc(empty) + "</div>";
       card.innerHTML = head + list + planActions(t);
       agState.renderedEditing = agState.editing;
       card.classList.toggle("is-editing", !!agState.editing);
@@ -424,12 +434,21 @@
     }
     if (abortBtn) {
       abortBtn.classList.toggle("hidden",
-        t.status !== "running" && t.status !== "awaiting_confirm" && t.status !== "planned");
+        t.status !== "running" && t.status !== "awaiting_confirm"
+        && t.status !== "planned" && t.status !== "planning");
     }
 
     // 顶部提示
     if (agState.editing) say("正在编辑参数，保存或取消后继续");
-    else if (t.status === "planning") say("正在生成计划，会打开一个浏览器窗口（约 30-60 秒），请勿关闭它…");
+    else if (t.status === "planning") {
+      // 计划阶段也要给出路：卡住时告诉用户能中止、能重排
+      var secs = agState.t0 ? Math.round((Date.now() - agState.t0) / 1000) : 0;
+      if (secs > 150) {
+        say("已经等了 " + secs + " 秒还没出计划，多半是卡住了：点「中止」，再用「重新生成计划」重试", "warn");
+      } else {
+        say("正在生成计划，会打开一个浏览器窗口（约 30-60 秒），请勿关闭它…");
+      }
+    }
     else if (t.status === "aborted") {
       say(t.busy ? "正在停止上一个步骤，稍等再点「继续执行」" : "已中止；未执行的步骤都留着，可以改完继续跑", "warn");
     }
@@ -565,6 +584,45 @@
     } catch (e) { say(e.message, "err"); }
   }
 
+  async function onDelete() {
+    if (!agState.id) return;
+    try {
+      await postJSON("/api/agent/delete", { id: agState.id });
+      agState.id = null; agState.last = null; agState.editing = null;
+      stopPoll();
+      el("agentPlanCard").classList.add("hidden");
+      el("agentLogWrap").classList.add("hidden");
+      el("agentSummary").classList.add("hidden");
+      el("agentExamples").classList.remove("hidden");
+      say("已删除该任务记录", "ok");
+      if (!el("agentHistory").classList.contains("hidden")) renderHistory();
+    } catch (e) { say(e.message, "err"); }
+  }
+
+  // 一键清掉失败 / 已中止的残留任务，免得历史里堆一堆没用的
+  async function onPurge() {
+    var d;
+    try { d = await getJSON("/api/agent/status"); } catch (e) { say(e.message, "err"); return; }
+    var junk = (d.tasks || []).filter(function (r) {
+      return r.status === "failed" || r.status === "aborted";
+    });
+    if (!junk.length) { say("没有需要清理的任务", "ok"); return; }
+    if (!confirm("要删除 " + junk.length + " 个「失败 / 已中止」的任务记录吗？\n（只是清掉任务记录，不影响 Zotero 里的文献）")) return;
+    try {
+      for (var i = 0; i < junk.length; i++) {
+        await postJSON("/api/agent/delete", { id: junk[i].id });
+      }
+      if (agState.id && junk.some(function (r) { return r.id === agState.id; })) {
+        agState.id = null; agState.last = null;
+        el("agentPlanCard").classList.add("hidden");
+        el("agentLogWrap").classList.add("hidden");
+        el("agentExamples").classList.remove("hidden");
+      }
+      say("已清理 " + junk.length + " 个任务记录", "ok");
+      renderHistory();
+    } catch (e) { say(e.message, "err"); }
+  }
+
   document.addEventListener("click", function (e) {
     var b = e.target.closest ? e.target.closest("[data-act]") : null;
     if (!b) return;
@@ -574,6 +632,8 @@
     else if (act === "save") onSave(b.dataset.step);
     else if (act === "cancel") onCancelEdit();
     else if (act === "replan") onReplan();
+    else if (act === "delete") onDelete();
+    else if (act === "purge") onPurge();
     else if (act === "run" || act === "retry") onRun();
   });
 
@@ -632,7 +692,11 @@
     var d;
     try { d = await getJSON("/api/agent/status"); } catch (e) { box.innerHTML = '<div class="muted">读取失败</div>'; return; }
     var rows = d.tasks || [];
-    var h = ['<div class="cap-head"><h3>历史任务</h3><span class="muted">共 ' + rows.length + " 个</span></div>"];
+    var nJunk = rows.filter(function (r) { return r.status === "failed" || r.status === "aborted"; }).length;
+    var h = ['<div class="cap-head"><h3>历史任务</h3><span class="muted">共 ' + rows.length + " 个</span>"
+      + '<span class="hist-tools">'
+      + (nJunk ? '<button class="ghost btn-sm" data-act="purge">清理失败/已中止（' + nJunk + '）</button>' : "")
+      + "</span></div>"];
     if (!rows.length) h.push('<div class="muted">还没有任务记录。上面发一条指令试试。</div>');
     else {
       h.push('<ul class="hist-list">');

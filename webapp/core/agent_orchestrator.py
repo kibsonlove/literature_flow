@@ -101,6 +101,7 @@ def get_task(task_id):
 
 
 def list_tasks(limit=20):
+    _reap_stale()          # 顺手把"卡死"的任务标成失败，别让它们永远停在 planning
     d = _tasks_dir()
     rows = []
     for fn in os.listdir(d):
@@ -134,6 +135,54 @@ def _prune():
             os.remove(p)
         except Exception:
             pass
+
+
+def _age_min(t):
+    ts = t.get("updated_at") or t.get("created_at") or ""
+    try:
+        return (time.time() - time.mktime(time.strptime(ts, "%Y-%m-%d %H:%M:%S"))) / 60.0
+    except Exception:
+        return 0.0
+
+
+def _reap_stale(plan_min=10, run_min=120):
+    """回收"卡死"的任务，避免它们永远停在「正在生成计划…」这种没有出口的状态。
+
+    什么算卡死：状态是 planning / running，但**没有任何执行线程在跑**（不在 `_RUNNING` 里），
+    且已经过去足够久。踩过的坑：前端连点「生成计划」，被 409 挡掉的那几次
+    仍然在磁盘上留下了任务记录，于是界面上永远转圈、用户以为"点了没反应"。
+
+    只改状态、不删记录——用户能看到失败原因，自己决定「重新生成计划」还是删掉。
+    """
+    with _LOCK:
+        running = set(_RUNNING)
+    n = 0
+    for fn in os.listdir(_tasks_dir()):
+        if not fn.endswith(".json"):
+            continue
+        p = os.path.join(_tasks_dir(), fn)
+        try:
+            with open(p, encoding="utf-8") as f:
+                t = json.load(f)
+        except Exception:
+            continue
+        if (t.get("id") or "") in running:
+            continue
+        st, age = t.get("status"), _age_min(t)
+        reason = None
+        if st == "planning" and age > plan_min:
+            reason = ("生成计划时中断了（多半是被并发提交挡掉、或浏览器通道卡住）。"
+                      "点「重新生成计划」可以重试。")
+        elif st == "running" and age > run_min:
+            reason = "任务状态异常中断（后台执行线程已经不在了），请重新生成计划后重试。"
+        if reason:
+            with _lock_for(t["id"]):
+                t["status"] = "failed"
+                t["error"] = reason
+                _log(t, reason)
+                _save(t)
+            n += 1
+    return n
 
 
 # ---------------------------------------------------------------- 小工具
@@ -486,6 +535,14 @@ def plan_task(task_id, log=None):
                                          spec=A.spec_text())
             raw = _llm_text(prompt, backend=t.get("backend", "webchat"),
                             log=lambda m: _log(t, m), system=_SYS)
+            # 等模型的这几十秒里用户可能点了「中止」→ 那就别再把手里的计划写回去
+            fresh = get_task(task_id)
+            if fresh and fresh.get("status") == "aborted":
+                _log(fresh, "已中止，这次生成的计划作废")
+                _save(fresh)
+                with _LOCK:
+                    _ABORT_FLAG.discard(task_id)
+                return fresh
             obj = _first_json_object(raw)
             if not obj:
                 raise ValueError("没有从模型输出里解析出 JSON 计划")
