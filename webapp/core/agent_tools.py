@@ -137,7 +137,10 @@ def _t_lit_import(args, ctx):
         from . import litsearch
         r = litsearch.import_records(
             records, collection=collection, tags=tags,
-            fetch_pdf=bool(args.get("fetch_pdf")), log=ctx.log)
+            # 默认抓全文 —— 与「文献检索」面板那个默认勾上的「抓取开放获取全文」保持一致。
+            # 旧写法 `bool(args.get("fetch_pdf"))` 在模型漏写这个参数时等于"不抓"，
+            # 于是智能体这条路和面板的表现就不一样了（用户就是被这一点绕进去的）。
+            fetch_pdf=bool(args.get("fetch_pdf", True)), log=ctx.log)
     except Exception as e:
         return _err("lit_import", f"入库失败：{repr(e)[:150]}")
     if not r.get("ok"):
@@ -145,10 +148,17 @@ def _t_lit_import(args, ctx):
     where = f"到分类「{collection}」" if collection else "到 Zotero 库"
     msg = (f"入库{where}：新建 {r.get('created', 0)} 条，跳过重复 {r.get('skipped', 0)} 条"
            f"，抓到全文 {r.get('pdf_ok', 0)} 篇")
+    if r.get("pdf_fail"):
+        by = r.get("pdf_by") or {}
+        used = "、".join(f"{k} {v}" for k, v in by.items() if v)
+        msg += f"，未抓到 {r['pdf_fail']} 篇" + (f"（抓到的方式：{used}）" if used else "")
     if capped:
         msg += f"（共检索到 {total} 条，按上限只取前 {cap} 条，其余 {capped} 条未处理）"
+    if r.get("manifest"):
+        msg += f"；清单：reports/{r['manifest']}"
     return _ok("lit_import", msg, {"created": r.get("created"), "skipped": r.get("skipped"),
                                    "pdf_ok": r.get("pdf_ok"), "pdf_fail": r.get("pdf_fail"),
+                                   "pdf_by": r.get("pdf_by"), "manifest": r.get("manifest"),
                                    "total_found": total, "capped": capped,
                                    "collection": collection, "items": r.get("items") or []})
 
@@ -419,7 +429,8 @@ TOOLS = [
                            "desc": "入库到哪个 Zotero 分类；不存在会新建；留空则只进库不分类"},
             "tags": {"type": "array<string>", "required": False},
             "fetch_pdf": {"type": "bool", "required": False,
-                          "desc": "是否抓开放获取全文，默认 true（注意：条数多时会很慢，每篇都要下载）"},
+                          "desc": "是否抓开放获取全文，默认 true（条数多时会很慢；抓不到的会写进入库清单，"
+                                  "不需要为某一篇单独重试）"},
         },
         "danger": True,
         "fn": _t_lit_import,

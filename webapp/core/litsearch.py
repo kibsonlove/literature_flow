@@ -15,10 +15,10 @@
 检索式语法：每行一条，支持 AND / OR / NOT 与双引号短语（与 OpenAlex 一致）。
 传给 arXiv 时按同一套语义翻译（空白分隔视为 AND）。
 """
+import hashlib
 import json
 import os
 import re
-import time
 import time
 import urllib.error
 import urllib.parse
@@ -32,6 +32,17 @@ OA_BASE = "https://api.openalex.org"
 ARXIV_BASE = "https://export.arxiv.org/api/query"
 UA = "literature-flow/1.0 (mailto:litflow@example.com)"
 _NS = {"a": "http://www.w3.org/2005/Atom", "arxiv": "http://arxiv.org/schemas/atom"}
+
+# 抓开放全文时用的 UA/头：与调 API 用的 UA 分开——API 那边按 OpenAlex 的礼仪带邮箱，
+# 抓 PDF 这边要尽量像一个普通浏览器（很多出版社直接拒非浏览器请求）。
+# ⚠ 实测：光换 UA 不足以过 MDPI / ACM / OUP（仍是 403），它们看的是指纹而非 UA 字符串，
+# 所以那几家必须走下面的「浏览器兜底」，别指望改 UA 就能解决。
+BROWSER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+_PDF_HEADERS = {
+    "Accept": "application/pdf,text/html;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8",
+}
 
 ABSTRACT_MAX = 700
 
@@ -177,12 +188,37 @@ def _invert_to_text(inv):
     return " ".join(pos[k] for k in sorted(pos))
 
 
+def _oa_candidates(w):
+    """一篇论文所有「可能有全文」的链接，按可信度排序并去重。
+
+    只看 `best_oa_location` 是不够的：它指向的那个地址常常是落地页、或者早就失效，
+    而 OpenAlex 同时还给了其它开放位置（仓库版、预印本…）。挨个试能多救回一批。
+    顺序 = 直接 PDF 优先，其次落地页；best 的排在最前。
+    """
+    out = []
+
+    def add(u):
+        u = (u or "").strip()
+        if u and u not in out:
+            out.append(u)
+
+    best = w.get("best_oa_location") or {}
+    locs = [x for x in (w.get("locations") or []) if isinstance(x, dict)]
+    add(best.get("pdf_url"))
+    for l in locs:
+        add(l.get("pdf_url"))
+    add(best.get("landing_page_url"))
+    add((w.get("open_access") or {}).get("oa_url"))
+    for l in locs:
+        add(l.get("landing_page_url"))
+    return out
+
+
 def _norm_openalex(w):
     loc = w.get("primary_location") or {}
     src = loc.get("source") or {}
-    best = w.get("best_oa_location") or {}
-    oa_url = (best.get("pdf_url") or best.get("landing_page_url")
-              or (w.get("open_access") or {}).get("oa_url") or "")
+    cands = _oa_candidates(w)
+    oa_url = cands[0] if cands else ""
     abstract = _invert_to_text(w.get("abstract_inverted_index"))[:ABSTRACT_MAX]
     return {
         "uid": "openalex:" + (w.get("id") or "").rsplit("/", 1)[-1],
@@ -196,7 +232,8 @@ def _norm_openalex(w):
         "venue_type": src.get("type") or "",
         "doi": (w.get("doi") or "").replace("https://doi.org/", ""),
         "url": loc.get("landing_page_url") or w.get("doi") or "",
-        "oa_url": oa_url or "",
+        "oa_url": oa_url,
+        "oa_urls": cands,
         "is_oa": bool((w.get("open_access") or {}).get("is_oa")),
         "cited_by": w.get("cited_by_count") or 0,
         "abstract": abstract,
@@ -227,6 +264,7 @@ def _norm_arxiv(entry):
         "doi": (entry.findtext("arxiv:doi", "", _NS) or "").strip(),
         "url": eid,
         "oa_url": pdf,
+        "oa_urls": [pdf] if pdf else [],
         "is_oa": True,
         "cited_by": 0,
         "abstract": re.sub(r"\s+", " ", entry.findtext("a:summary", "", _NS) or "").strip()[:ABSTRACT_MAX],
@@ -329,6 +367,16 @@ def _merge(dst, src):
     for k in ("oa_url", "doi", "venue", "abstract"):
         if not dst.get(k) and src.get(k):
             dst[k] = src[k]
+    # 候选链接要合并，不是"缺了才补"：两个源各自找到的开放位置都值得留着试
+    merged = list(dst.get("oa_urls") or [])
+    if dst.get("oa_url") and dst["oa_url"] not in merged:
+        merged.insert(0, dst["oa_url"])
+    for u in (src.get("oa_urls") or ([src["oa_url"]] if src.get("oa_url") else [])):
+        if u and u not in merged:
+            merged.append(u)
+    if merged:
+        dst["oa_urls"] = merged
+        dst.setdefault("oa_url", merged[0])
     dst["cited_by"] = max(dst.get("cited_by") or 0, src.get("cited_by") or 0)
     dst["is_oa"] = bool(dst.get("is_oa") or src.get("is_oa"))
     if src.get("uid", "").startswith("openalex:") and not dst["uid"].startswith("openalex:"):
@@ -577,53 +625,268 @@ def delete_topic(slug):
     return False
 
 
-# ---------- OA 全文下载 ----------
+# ---------- OA 全文抓取：三级递进 ----------
+#
+# ① 直链：把候选链接当 PDF 直接 GET。arxiv / aclanthology / AAAI 这类真直链一步到手。
+# ② 落地页解析：拿回来是网页时，读这张网页**自己声明**的 PDF 地址
+#    （citation_pdf_url / 页内 .pdf 链接）。doi.org 系列多属此类——你手动点开能下全文，
+#    程序却只看到一张网页，旧版就在这里直接放弃了。
+# ③ 浏览器兜底：被反爬拦下（HTTP 403）时，用无头浏览器先过一次挑战、落下 cookie 再要文件。
+#    实测：**光换浏览器 UA 没用**（MDPI / ACM / OUP 依旧 403，它们看的是指纹），必须真浏览器。
+#    它慢，所以**只在明确被拒时才动用**，不做无差别尝试。
+#
+# 每篇都记下"卡在哪一级、为什么"，写进入库清单，方便判断哪些值得手动补。
 
-def download_pdf(url, dest_dir, timeout=20, max_mb=40, total_timeout=90):
-    """下载开放获取 PDF。返回本地路径；非 PDF 内容或失败返回 (None, 原因)。
+_PDF_MAX_MB = 40
+_PDF_SOCK_TIMEOUT = 20
+_PDF_TOTAL_TIMEOUT = 90
 
-    ⚠ `timeout` 只作用于**每次 socket 读写**，不限制总时长：服务端只要每 20 秒吐一点数据，
-    就能把这一步无限拖住。踩过的坑：一次 347 条的入库卡在某篇 PDF 上，
-    整条任务从 20:25 起再无任何动作、界面看着像死了。所以这里额外加**总时长上限**
-    （`total_timeout`），到点就放弃这一篇继续下一篇。
+
+def _hdrs(referer=""):
+    h = dict(_PDF_HEADERS)
+    h["User-Agent"] = BROWSER_UA
+    if referer:
+        h["Referer"] = referer
+    return h
+
+
+def _rm(path):
+    try:
+        os.remove(path)
+    except Exception:
+        pass
+
+
+def _dest(dest_dir, url):
+    """给下载文件起个安全的名字（带链接指纹，避免不同论文同名互相覆盖）。"""
+    os.makedirs(dest_dir, exist_ok=True)
+    base = urllib.parse.urlparse(url).path.rsplit("/", 1)[-1]
+    base = re.sub(r"[^0-9A-Za-z._-]+", "_", base)[:70]
+    if not base:
+        base = "paper"
+    if not base.lower().endswith(".pdf"):
+        base += ".pdf"
+    tag = hashlib.md5(url.encode("utf-8")).hexdigest()[:8]
+    return os.path.join(dest_dir, f"{tag}_{base}")
+
+
+def download_pdf(url, dest_dir, timeout=_PDF_SOCK_TIMEOUT, max_mb=_PDF_MAX_MB,
+                 total_timeout=_PDF_TOTAL_TIMEOUT, referer=""):
+    """①级：把 url 当 PDF 直接 GET。返回 (本地路径, 原因)，成功时原因为 ""。
+
+    原因里的 "HTTP 403" 是**可重试**信号（表示该上浏览器兜底），其余基本可以直接放弃。
+    ⚠ `timeout` 只管每次 socket 读写，另有 `total_timeout` 限制总时长——服务端只要每 20 秒
+    吐一点字节，就能把整条任务无限拖住（踩过：347 条卡在一篇上，把服务整个拖死）。
     """
     if not url:
         return None, "无 OA 链接"
-    req = urllib.request.Request(url, headers={"User-Agent": UA})
     deadline = time.time() + total_timeout
     try:
+        req = urllib.request.Request(url, headers=_hdrs(referer))
         with urllib.request.urlopen(req, timeout=timeout) as r:
-            head = r.read(1024)
-            if not head.startswith(b"%PDF"):
-                return None, "链接不是 PDF（可能是落地页）"
-            os.makedirs(dest_dir, exist_ok=True)
-            name = re.sub(r"[^0-9A-Za-z._-]+", "_", url.rsplit("/", 1)[-1])[:80] or "paper.pdf"
-            if not name.lower().endswith(".pdf"):
-                name += ".pdf"
-            path = os.path.join(dest_dir, name)
+            ctype = (r.headers.get("Content-Type") or "").lower()
+            head = r.read(4096)
+            if not (head.startswith(b"%PDF") or "application/pdf" in ctype):
+                return None, "网页而非 PDF"
+            path = _dest(dest_dir, url)
             total = len(head)
             with open(path, "wb") as w:
                 w.write(head)
                 while True:
                     if time.time() > deadline:
                         w.close()
-                        try:
-                            os.remove(path)
-                        except Exception:
-                            pass
-                        return None, f"下载超过 {total_timeout} 秒，已跳过"
+                        _rm(path)
+                        return None, f"下载超过 {total_timeout} 秒"
                     chunk = r.read(65536)
                     if not chunk:
                         break
                     total += len(chunk)
                     if total > max_mb * 1024 * 1024:
                         w.close()
-                        os.remove(path)
-                        return None, f"超过 {max_mb}MB 上限"
+                        _rm(path)
+                        return None, f"超过 {max_mb}MB"
                     w.write(chunk)
         return path, ""
+    except urllib.error.HTTPError as e:
+        return None, f"HTTP {e.code}"
     except Exception as e:
-        return None, repr(e)[:120]
+        return None, repr(e)[:90]
+
+
+def _pdf_url_in_html(html, base_url):
+    """从网页 HTML 里找 PDF 地址。返回 (url, 依据) 或 (None, "")。
+
+    先认学术网站通用的 `<meta name="citation_pdf_url">`（这一条最靠得住），
+    再退到页面里第一个 `.pdf` 链接。
+    """
+    for pat in (
+        r'<meta[^>]+name=["\']citation_pdf_url["\'][^>]*content=["\']([^"\']+)',
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]*name=["\']citation_pdf_url["\']',
+        r'<link[^>]+type=["\']application/pdf["\'][^>]*href=["\']([^"\']+)',
+    ):
+        m = re.search(pat, html, re.I)
+        if m:
+            return urllib.parse.urljoin(base_url, m.group(1).strip()), "网页声明的 PDF 地址"
+    m = re.search(r'href=["\']([^"\']+\.pdf(?:\?[^"\']*)?)["\']', html, re.I)
+    if m:
+        return urllib.parse.urljoin(base_url, m.group(1).strip()), "页内 .pdf 链接"
+    return None, ""
+
+
+def page_pdf_url(url, timeout=15):
+    """②级：打开网页，找它自己声明的 PDF 地址。返回 (pdf_url, 依据) 或 (None, 原因)。"""
+    try:
+        req = urllib.request.Request(url, headers=_hdrs())
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            raw = r.read(400 * 1024)
+    except urllib.error.HTTPError as e:
+        return None, f"HTTP {e.code}"
+    except Exception as e:
+        return None, repr(e)[:60]
+    found, _how = _pdf_url_in_html(raw.decode("utf-8", "ignore"), url)
+    return (found, "ok") if found else (None, "网页里找不到 PDF 地址")
+
+
+def browser_pdf(url, dest_dir, timeout=45, max_mb=_PDF_MAX_MB, log=None):
+    """③级：浏览器兜底，只给被反爬拦下（403）的站点用。
+
+    思路是"先过门、再要货"：用真浏览器把目标地址打开一次（过掉风控挑战、落下 cookie），
+    再用**同一个浏览器上下文**去要文件。纯 HTTP 客户端模仿浏览器是过不去的。
+    """
+    try:
+        from . import webchat as _wc
+        _wc._apply_browser_path()           # 复用网页端那套内核路径配置
+    except Exception:
+        pass
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception as e:
+        return None, f"没有可用的浏览器内核（{repr(e)[:50]}）"
+
+    try:
+        with sync_playwright() as pw:
+            b = pw.chromium.launch(headless=True)
+            try:
+                ctx = b.new_context(user_agent=BROWSER_UA, accept_downloads=True, locale="en-US")
+                page = ctx.new_page()
+                try:
+                    page.goto(url, wait_until="domcontentloaded", timeout=timeout * 1000)
+                except Exception:
+                    pass                    # 目标是 PDF 时导航会"变成下载"，属正常，忽略
+                cur = url
+                try:
+                    cur = page.url or url
+                except Exception:
+                    pass
+                extra = ""
+                try:
+                    html = page.content() or ""
+                except Exception:
+                    html = ""
+                if html and not html.lstrip().startswith("%PDF"):
+                    found, _how = _pdf_url_in_html(html, cur)
+                    # 只在确实换到了另一个地址时才改道——有些页面声明的 PDF 地址就是它自己，
+                    # 改过去等于原地打转（Emerald 就是这样）。
+                    if found and found not in (url, cur):
+                        cur, extra = found, "（在页面里找到了 PDF 地址）"
+                resp = ctx.request.get(cur, timeout=timeout * 1000, headers={"Referer": url})
+                if resp.ok:
+                    body = resp.body()
+                    if body[:4] == b"%PDF":
+                        path = _dest(dest_dir, cur)
+                        with open(path, "wb") as w:
+                            w.write(body[:max_mb * 1024 * 1024])
+                        return path, extra
+                    return None, f"浏览器取回的也不是 PDF{extra}"
+                return None, f"浏览器也被拒（HTTP {resp.status}）{extra}"
+            finally:
+                try:
+                    b.close()
+                except Exception:
+                    pass
+    except Exception as e:
+        return None, f"浏览器抓取失败：{repr(e)[:70]}"
+
+
+def _why_text(note):
+    """把内部的失败标记翻成用户看得懂的一句话（写进入库清单）。"""
+    n = note or ""
+    if not n:
+        return "没有可用的开放获取链接"
+    if "HTTP 403" in n:
+        return "被出版商反爬拦下（403）"
+    if "网页而非 PDF" in n:
+        return "拿到的都是网页，页面里没有公开的 PDF 地址"
+    if "找不到 PDF" in n:
+        return "落地页里没有公开的 PDF 地址"
+    if "浏览器也被拒" in n or "浏览器取回" in n:
+        return "反爬或付费墙，浏览器也拿不到"
+    return n
+
+
+def fetch_fulltext(rec, dest_dir, allow_browser=True, log=None):
+    """抓一篇文献的开放全文（三级递进）。返回：
+
+    {ok, path, how, reason, final_url, tried}
+      how ∈ "直链" / "落地页解析" / "浏览器兜底"；失败时 reason 给用户看得懂的原因。
+
+    注意命名：**不能叫 `fetch_pdf`**——`import_records()` 的形参就叫 `fetch_pdf`（bool），
+    同名会被参数遮蔽，调用时直接 TypeError。
+    """
+    cands = [u for u in (rec.get("oa_urls") or []) if u]
+    if not cands and rec.get("oa_url"):
+        cands = [rec["oa_url"]]
+    if not cands:
+        return {"ok": False, "path": None, "how": "", "final_url": "", "tried": 0,
+                "reason": "OpenAlex 没给开放获取链接（多半没有公开版本）"}
+
+    tried, blocked, last = [], False, ""
+
+    # ① 直接当 PDF 下
+    for u in cands[:4]:
+        tried.append(u)
+        path, why = download_pdf(u, dest_dir)
+        if path:
+            return {"ok": True, "path": path, "how": "直链", "final_url": u,
+                    "reason": "", "tried": len(tried)}
+        last = why
+        if why.startswith("HTTP 403"):
+            blocked = True
+
+    # ② 当成网页，读它自己声明的 PDF 地址
+    for u in cands[:3]:
+        pdf_url, note = page_pdf_url(u)
+        if not pdf_url:
+            last = note
+            if note.startswith("HTTP 403"):
+                blocked = True
+            continue
+        tried.append(pdf_url)
+        path, why = download_pdf(pdf_url, dest_dir, referer=u)
+        if path:
+            return {"ok": True, "path": path, "how": "落地页解析", "final_url": pdf_url,
+                    "reason": "", "tried": len(tried)}
+        # 页面明明声明了 PDF 地址、拿回来却是网页 —— 典型的"要订阅/登录"。
+        # 这句必须写清楚，否则用户会以为是我们没找着地址（Emerald 实测就是这样）。
+        last = ("页面声明的 PDF 地址实际返回网页（多半需要订阅或登录）"
+                if why == "网页而非 PDF" else why)
+        if why.startswith("HTTP 403"):
+            blocked = True
+
+    # ③ 只在"被明确拒绝"时才动用浏览器——它慢，不做无差别尝试
+    if allow_browser and blocked:
+        for u in cands[:2]:
+            tried.append(u)
+            path, why = browser_pdf(u, dest_dir, log=log)
+            if path:
+                return {"ok": True, "path": path, "how": "浏览器兜底", "final_url": u,
+                        "reason": "", "tried": len(tried)}
+            last = why
+        return {"ok": False, "path": None, "how": "", "final_url": "", "tried": len(tried),
+                "reason": "反爬或付费墙：" + _why_text(last)}
+
+    return {"ok": False, "path": None, "how": "", "final_url": "", "tried": len(tried),
+            "reason": _why_text(last)}
 
 
 # ---------- 检索式生成（LLM） ----------
@@ -729,16 +992,77 @@ def generate_queries(topic, count=4, backend="webchat", log=None):
 
 # ---------- 入库 ----------
 
-def import_records(records, collection="", tags=None, fetch_pdf=False, log=None):
-    """把选中的检索结果写进 Zotero：建条目 →（可选）抓 OA PDF 挂附件 →（可选）进分类。
+def _csv_cell(v):
+    return '"' + str("" if v is None else v).replace('"', '""') + '"'
+
+
+def write_import_manifest(rows, collection=""):
+    """把一次入库的结果写成 CSV 清单，落到 reports/。返回文件名；写不成返回 ""。
+
+    这份清单是给**人**看的：哪些进了库、哪些抓到了全文、没抓到的是卡在哪一级、为什么。
+    用 utf-8-sig（带 BOM），Excel 双击打开中文不乱码。
+    """
+    if not rows:
+        return ""
+    try:
+        from . import tools as _tools
+        d = _tools.reports_dir()
+        os.makedirs(d, exist_ok=True)
+    except Exception:
+        return ""
+    head = ["标题", "年份", "作者", "来源", "DOI", "结果", "PDF", "取到方式",
+            "未抓到原因", "尝试次数", "最终链接", "入库分类"]
+    keys = ("title", "year", "authors", "source", "doi", "status", "pdf", "pdf_how",
+            "pdf_reason", "pdf_tried", "pdf_final_url", "collection")
+    lines = [",".join(_csv_cell(h) for h in head)]
+    lines += [",".join(_csv_cell(r.get(k)) for k in keys) for r in rows]
+    safe = re.sub(r"[\\/:*?\"<>|\s]+", "_", (collection or "未分类")).strip("_")[:24] or "未分类"
+    name = f"文献入库_{safe}_{time.strftime('%Y-%m-%d_%H%M')}.csv"
+    try:
+        with open(os.path.join(d, name), "w", encoding="utf-8-sig", newline="") as f:
+            f.write("\r\n".join(lines) + "\r\n")
+    except Exception:
+        return ""
+    return name
+
+
+def import_records(records, collection="", tags=None, fetch_pdf=False, log=None,
+                   allow_browser=True):
+    """把选中的检索结果写进 Zotero：建条目 →（可选）抓 OA 全文挂附件 →（可选）进分类。
 
     只写调用方明确传入的记录；不碰库里已有内容。
+    `fetch_pdf=True` 时按「直链 → 落地页解析 → 浏览器兜底」三级抓全文（见 `fetch_fulltext`），
+    跑完在 reports/ 落一份 CSV 清单，逐条写明抓到没有、卡在哪一级、为什么。
     """
     import tempfile
     from core import zotero_io
 
     tags = [t for t in (tags or []) if t and t.strip()]
-    out = {"ok": True, "created": 0, "skipped": 0, "pdf_ok": 0, "pdf_fail": 0, "items": []}
+    out = {"ok": True, "created": 0, "skipped": 0, "pdf_ok": 0, "pdf_fail": 0,
+           "pdf_by": {"直链": 0, "落地页解析": 0, "浏览器兜底": 0}, "items": [], "manifest": ""}
+    rows = []          # 清单行：含跳过的，比 out["items"] 更全
+
+    def note(rec, status, pdf=None, attempted=True):
+        if not fetch_pdf or not attempted:
+            pdf_cell = "未尝试"
+        elif pdf and pdf.get("ok"):
+            pdf_cell = "已抓到"
+        else:
+            pdf_cell = "未抓到"
+        rows.append({
+            "title": (rec.get("title") or "").strip()[:140],
+            "year": rec.get("year") or "",
+            "authors": "; ".join((rec.get("authors") or [])[:4]),
+            "source": "arXiv" if rec.get("source") == "arxiv" else "OpenAlex",
+            "doi": rec.get("doi") or "",
+            "status": status,
+            "pdf": pdf_cell,
+            "pdf_how": (pdf or {}).get("how") or "",
+            "pdf_reason": (pdf or {}).get("reason") or "",
+            "pdf_tried": (pdf or {}).get("tried") or 0,
+            "pdf_final_url": (pdf or {}).get("final_url") or "",
+            "collection": (collection or "").strip(),
+        })
 
     col_key = None
     if (collection or "").strip():
@@ -763,12 +1087,14 @@ def import_records(records, collection="", tags=None, fetch_pdf=False, log=None)
         title = (rec.get("title") or "").strip()
         if not title:
             out["skipped"] += 1
+            note(rec, "无标题，跳过", attempted=False)
             continue
         doi = (rec.get("doi") or "").strip().lower()
         tk = _title_key(title)
         if (doi and doi in idx["dois"]) or (tk and tk in idx["titles"]):
             out["skipped"] += 1
             out["items"].append({"title": title[:70], "status": "已在库，跳过"})
+            note(rec, "已在库，跳过", attempted=False)
             if log:
                 log(f"跳过（已在库）：{title[:50]}")
             continue
@@ -781,6 +1107,7 @@ def import_records(records, collection="", tags=None, fetch_pdf=False, log=None)
                 out["hint"] = hint          # 鉴权类错误只提示一次，不刷屏
             out["skipped"] += 1
             out["items"].append({"title": title[:70], "status": f"建条目失败：{repr(e)[:80]}"})
+            note(rec, f"建条目失败：{repr(e)[:80]}", attempted=False)
             if hint:
                 out["ok"] = False
                 break                       # 权限问题后面每条都会失败，直接停
@@ -791,24 +1118,29 @@ def import_records(records, collection="", tags=None, fetch_pdf=False, log=None)
         if tk:
             idx["titles"].add(tk)
         row = {"title": title[:70], "key": key, "status": "已入库"}
-        if fetch_pdf and rec.get("oa_url"):
-            path, why = download_pdf(rec["oa_url"], pdf_dir)
-            if path:
-                r = zotero_io.attach_pdf(key, path, filename=os.path.basename(path))
-                try:
-                    os.remove(path)
-                except Exception:
-                    pass
+        pdf = None
+        if fetch_pdf:
+            pdf = fetch_fulltext(rec, pdf_dir, allow_browser=allow_browser, log=log)
+            if pdf.get("ok"):
+                r = zotero_io.attach_pdf(key, pdf["path"], filename=os.path.basename(pdf["path"]))
+                _rm(pdf["path"])
                 if r.get("ok"):
                     out["pdf_ok"] += 1
-                    row["status"] += " + PDF"
+                    out["pdf_by"][pdf["how"]] = out["pdf_by"].get(pdf["how"], 0) + 1
+                    row["status"] += f" + 全文（{pdf['how']}）"
                 else:
                     out["pdf_fail"] += 1
-                    row["status"] += f"（PDF 挂载失败：{r.get('error')}）"
+                    row["status"] += f"（全文挂载失败：{r.get('error')}）"
+                    pdf = dict(pdf, ok=False, reason=f"挂载失败：{r.get('error')}")
             else:
                 out["pdf_fail"] += 1
-                row["status"] += f"（无 PDF：{why}）"
+                row["status"] += f"（未抓到全文：{pdf['reason']}）"
         out["items"].append(row)
+        note(rec, row["status"], pdf)
         if log:
             log(f"✓ {row['status']}：{title[:50]}")
+    if fetch_pdf:
+        out["manifest"] = write_import_manifest(rows, collection)
+        if out["manifest"] and log:
+            log(f"入库清单：reports/{out['manifest']}")
     return out

@@ -14,6 +14,12 @@ ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
 PYTHON = sys.executable
 REPORTS = os.path.join(ROOT, "reports")
 
+
+def reports_dir():
+    """产物报告目录（reports/）。路径一律用函数读，别 import 模块级常量（值拷贝，改配置不生效）。"""
+    return REPORTS
+
+
 # tool → (脚本相对路径, 是否变更类)。路径相对项目根，须与项目根下 scripts/ 的实际结构一致。
 TOOLS = {
     "lit_watch":    ("scripts/subscribe/lit_watch.py", False),
