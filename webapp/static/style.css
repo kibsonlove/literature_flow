@@ -1807,3 +1807,22 @@ summary svg { width: 1.05em; height: 1.05em; flex: none; }
   padding: var(--sp-2); max-height: 90px; overflow: auto; white-space: pre-wrap; word-break: break-all;
 }
 .ps-form-actions { display: flex; gap: var(--sp-2); align-items: center; margin-top: var(--sp-1); }
+
+/* --------------------------------------------------------------------------
+   22. 计划步骤的「参数可能不完整」预警（模型漏写引用 / 把该填的留空时提示）
+   -------------------------------------------------------------------------- */
+.ps-warn {
+  margin-top: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--c-warn-soft);
+  border: 1px solid var(--c-warn-line);
+  border-left: 3px solid var(--c-warn);
+  border-radius: var(--r-sm);
+  color: var(--c-warn);
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+}
+.ps-warn svg { flex: none; margin-top: 2px; }

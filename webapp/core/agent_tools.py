@@ -600,8 +600,51 @@ def _param_line(p):
     return "；".join(bits)
 
 
+# 每个工具的输出字段（`data` 里的键）。这份表既给 LLM 看（写进说明书，让它知道
+# 引用时该写哪个字段名），也给前端看（把 `$s2.results` 翻成人话："第 2 步的结果列表"）。
+RETURNS = {
+    "lit_generate_queries": "queries（字符串数组，生成的检索式）",
+    "lit_search": "count（条数）；results（文献对象数组，每条含 title/authors/year/doi/abstract/url/in_library）；in_library（已在库条数）",
+    "lit_import": "created（新建条数）；skipped（跳过重复）；pdf_ok（抓到全文的篇数）；items（新建条目的 key 与标题）",
+    "zotero_search_items": "count；items（数组，每项含 key/title/itemType/has_pdf）",
+    "zotero_recent_items": "count；items（同上结构）",
+    "zotero_collections": "count；collections（数组，每项含 key/name/depth）",
+    "zotero_collection_items": "count；items（同上结构）",
+    "kb_search": "count；hits（数组，每项含 title/section/score/snippet）",
+    "kb_stats": "items（已索引篇数）；chunks（片段数）；pending（已解析待索引篇数）",
+    "reading_candidates": "count；items（数组，每项含 key/title/itemType/year）",
+    "batch_notes": "total（本次安排精读的篇数）；keys（条目 key 数组）；background（true 表示后台长任务）",
+    "reading_status": "batch（含 running/done/total/log_tail）；kb（含 items/pending）",
+    "run_maintenance": "tool；apply（是否真正应用了改动）；output（脚本输出尾部）",
+    "list_reports": "count；reports（数组，每项含 name/size）",
+}
+
+# 上面那段的机器可读版本：只列字段名，供"计划体检"判断 `$sN.字段` 是否真的存在。
+# 与 RETURNS 同源（改一处记得改另一处；加字段时两边都要加）。
+RETURN_FIELDS = {
+    "lit_generate_queries": ["queries"],
+    "lit_search": ["count", "results", "in_library"],
+    "lit_import": ["created", "skipped", "pdf_ok", "items"],
+    "zotero_search_items": ["count", "items"],
+    "zotero_recent_items": ["count", "items"],
+    "zotero_collections": ["count", "collections"],
+    "zotero_collection_items": ["count", "items"],
+    "kb_search": ["count", "hits"],
+    "kb_stats": ["items", "chunks", "pending"],
+    "reading_candidates": ["count", "items"],
+    "batch_notes": ["total", "keys", "background"],
+    "reading_status": ["batch", "kb"],
+    "run_maintenance": ["tool", "apply", "output"],
+    "list_reports": ["count", "reports"],
+}
+
+
 def spec_text():
-    """导出「给 LLM 看的工具说明书」文本（规划 prompt 里直接用）。"""
+    """导出「给 LLM 看的工具说明书」文本（规划 prompt 里直接用）。
+
+    每条都写明**输出字段**——模型必须知道上一步的输出里到底有哪些字段可以引用，
+    否则它会瞎写（实测踩过：把 `$s2.results` 写成 `s2.results`，或干脆给个空数组）。
+    """
     lines = []
     for i, t in enumerate(TOOLS, 1):
         danger = t.get("danger", False)
@@ -610,9 +653,12 @@ def spec_text():
         ps = t.get("params") or {}
         if ps:
             for k, p in ps.items():
-                lines.append(f"     - {k}: {_param_line(p)}")
+                lines.append(f"     - 入参 {k}: {_param_line(p)}")
         else:
-            lines.append("     - （无参数）")
+            lines.append("     - 入参：（无）")
+        ret = RETURNS.get(t["name"])
+        if ret:
+            lines.append(f"     - 输出字段（可被后续步骤用 $sN.字段 引用）：{ret}")
     return "\n".join(lines)
 
 

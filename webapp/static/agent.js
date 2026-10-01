@@ -218,7 +218,8 @@
 
   // 任务处于这些状态时，计划还是"可改"的（已经跑完的不许改）
   var EDITABLE = { "planned": 1, "aborted": 1, "failed": 1, "awaiting_confirm": 1 };
-  var REF_RE = /^\$s\d+(\.|$)/;
+  // 引用形如 $s2.results（后端已把漏掉 $ 的写法归一过；这里再宽一点兜底）
+  var REF_RE = /^\$?\s*s(\d+)((?:\.\w+)*)$/;
 
   function toolSpec(name) {
     for (var i = 0; i < agState.tools.length; i++) {
@@ -229,8 +230,20 @@
 
   function typeOf(v) { return Object.prototype.toString.call(v); }
 
+  // 把 "$s2.results" 翻成人话：「第 2 步「检索文献」的结果（results）」——用户看不懂 $s2 是什么
+  function refLabel(val, t) {
+    var m = REF_RE.exec(String(val).trim());
+    if (!m) return "";
+    var n = parseInt(m[1], 10);
+    var field = (m[2] || "").replace(/^\./, "");
+    var steps = (t && t.steps) || [];
+    var src = steps[n - 1];
+    var who = src ? ('第 ' + n + ' 步「' + (src.title || src.tool) + '」') : ("第 " + n + " 步");
+    return field ? (who + " 运行结果里的 " + field) : (who + " 的完整结果");
+  }
+
   // 每个参数渲染一个控件；引用型（$sN…）与数组型对象只读展示——那些是上一步自动带进来的
-  function fieldHtml(tool, key, p, val) {
+  function fieldHtml(tool, key, p, val, t) {
     var id = "agf_" + esc(tool) + "_" + esc(key);
     var label = '<span class="agf-label">' + esc(key) + "</span>";
     var hintTxt = p.desc ? '<span class="agf-hint">' + esc(p.desc) + "</span>" : "";
@@ -238,7 +251,8 @@
     if (typeof val === "string" && REF_RE.test(val.trim())) {
       return '<label class="agf-row is-ref" for="' + id + '">' + label
         + '<input id="' + id + '" type="text" value="' + esc(val) + '" data-ref="1" readonly>'
-        + '<span class="agf-hint">自动引用：' + esc(val) + "（由前面那一步的结果带入，不用手改）</span></label>";
+        + '<span class="agf-hint">自动引用：' + esc(refLabel(val, t)) + "（" + esc(val.trim())
+        + "）——由前面那一步算完自动带过来，不用手改</span></label>";
     }
     var t = (p.type || "").toLowerCase();
     if (t === "bool" || typeof val === "boolean") {
@@ -269,11 +283,16 @@
       + esc(val == null ? "" : val) + '">' + hintTxt + "</label>";
   }
 
-  function formHtml(s) {
+  function formHtml(s, t) {
     var spec = toolSpec(s.tool) || { params: {} };
     var params = spec.params || {};
-    var rows = Object.keys(params).map(function (k) {
-      return fieldHtml(s.tool, k, params[k], s.args ? s.args[k] : undefined);
+    var keys = Object.keys(params);
+    // 参数表里没有、但 args 里有的（比如模型多塞的），也让人看得见，免得"参数不见了"的困惑
+    Object.keys(s.args || {}).forEach(function (k) {
+      if (keys.indexOf(k) === -1) keys.push(k);
+    });
+    var rows = keys.map(function (k) {
+      return fieldHtml(s.tool, k, params[k] || {}, s.args ? s.args[k] : undefined, t);
     }).join("");
     if (!rows) rows = '<div class="muted">这一步没有可改的参数。</div>';
     return '<div class="ps-form">'
@@ -296,11 +315,15 @@
       + '<span class="ps-tool">' + esc(s.tool) + "</span>"
       + (danger ? '<span class="ps-tag">需确认</span>' : "") + "</div>");
     if (s.why) h.push('<div class="ps-why">' + esc(s.why) + "</div>");
+    if (s.warning) {
+      h.push('<div class="ps-warn"><i data-lucide="triangle-alert" aria-hidden="true"></i>'
+        + esc(s.warning) + "　建议点「改参数」补上再执行</div>");
+    }
     if (s.summary) h.push('<div class="ps-result">' + esc(s.summary) + "</div>");
     if (s.error) h.push('<div class="ps-error">' + esc(s.error) + "</div>");
 
     if (agState.editing === s.id) {
-      h.push(formHtml(s));                       // 正在改这一步的参数
+      h.push(formHtml(s, t));                    // 正在改这一步的参数
     } else if (s.status === "awaiting_confirm") {
       h.push('<div class="ps-gate">');
       h.push('<div class="ps-gate-impact"><i data-lucide="triangle-alert" aria-hidden="true"></i>'

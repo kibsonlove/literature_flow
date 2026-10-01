@@ -234,11 +234,16 @@ _PLAN_PROMPT = """把下面这个任务拆成一份执行计划。你只能使�
 【调用原则】
 1. 步骤控制在 1-4 步，够用就行，不要为了凑步骤而拆；也不要写"检查/思考/等待"这类没有工具可执行的步骤。
 2. 标了【写库·需用户确认】的工具会暂停等用户点确认，只在确实需要时用，且一次任务最多出现一次。
-3. 需要把上一步结果传给下一步时，用 "$s1" 引用第 1 步的输出（步骤按顺序编号 s1、s2…）。
-   - 引用整个字段：`"queries": "$s1.queries"`
-   - 从列表里抽出某个字段：`"keys": "$s1.items.key"`（把 items 里每个元素的 key 抽成字符串列表）
+3. 需要把上一步结果传给下一步时，必须用引用，**不要留空、也不要自己编内容**：
+   - 引用写法是 `$s1.字段名`——**开头的 `$` 不能漏**，字段名必须取自下面每个工具的
+     「输出字段」清单（清单里没有的字段一律不存在）。
+   - 例如：`"queries": "$s1.queries"`、`"records": "$s2.results"`。
+   - 从列表里抽出某个字段：`"keys": "$s1.items.key"`（把 items 里每个元素的 key 抽成字符串列表）。
    - 只允许引用**排在前面**的步骤。
-4. 参数值必须是字面量或上述 `$sN` 引用，不要写表达式。
+   - **反例（会被打回）**：写成 `"queries": "s1.queries"`（漏 `$`）、`"records": "s2.results"`（漏 `$`）、
+     或该引用上一步却写成 `"queries": []`（留空导致这一步必然失败）。
+4. 参数值必须是字面量或上述 `$sN` 引用，不要写表达式。必填参数一律不能省。
+   确实不知道填什么的可选参数，就**整个省略**，不要给空字符串或空数组。
 
 【用户的研究课题】（用于理解任务背景，可能为空）
 {research}
@@ -258,6 +263,14 @@ _PLAN_PROMPT = """把下面这个任务拆成一份执行计划。你只能使�
   {{"title": "检索文献", "tool": "lit_search", "args": {{"queries": "$s1.queries", "since": "2023", "per_page": 50}}, "why": "在 OpenAlex / arXiv 找候选"}},
   {{"title": "入库到 XAI 分类", "tool": "lit_import", "args": {{"records": "$s2.results", "collection": "XAI", "fetch_pdf": true}}, "why": "把候选写进 Zotero（会等用户确认）"}}
 ]}}"""
+
+_PLAN_FIX = """
+
+【上一次的计划有下面这些问题，请重新出一份完整计划修正它们】
+{issues}
+
+注意：输出的仍然是一份**完整**计划（同样的 JSON 格式，包含所有步骤），不是只给改动的那几步。
+选填参数如果确实不知道就整个省略；需要上一步结果的参数必须写成 `$sN.字段名`（别漏 `$`、别留空）。"""
 
 _RECOVER_PROMPT = """任务执行中某一步失败了，请判断如何补救。
 
@@ -294,6 +307,9 @@ _SUM_PROMPT = """把下面这次自动化任务的结果，用中文写成 3-6 �
 # ---------------------------------------------------------------- 引用解析
 
 _REF_RE = re.compile(r"^\$s(\d+)(?:\.(.+))?$")
+# 兜底：模型漏写 `$` 时的写法（`s2.results`）。要求**必须带点**，
+# 免得把一个普通字面量（比如某个分类名就叫 "s2"）误当成引用。
+_REF_RE_LOOSE = re.compile(r"^s(\d+)\.(.+)$")
 
 
 def _nav(obj, parts):
@@ -316,7 +332,7 @@ def _resolve_refs(value, steps, seen=None):
     也不要静默传 None 进去（那会让后面的工具给出莫名其妙的报错）。
     """
     if isinstance(value, str):
-        m = _REF_RE.match(value.strip())
+        m = _REF_RE.match(value.strip()) or _REF_RE_LOOSE.match(value.strip())
         if not m:
             return value
         n = int(m.group(1))
@@ -354,6 +370,7 @@ def _normalize_steps(raw, task, already):
         args = s.get("args")
         if not isinstance(args, dict):
             args = {}
+        args = _fix_refs(args)
         seq += 1
         out.append({
             "id": f"s{seq}",
@@ -367,6 +384,7 @@ def _normalize_steps(raw, task, already):
             "approved": False,
             "summary": "",
             "error": "",
+            "warning": "",
             "impact": A.impact(tool, args) if A.is_danger(tool, args) else "",
             "result": None,
             "elapsed": None,
@@ -374,6 +392,67 @@ def _normalize_steps(raw, task, already):
         if len(out) >= MAX_STEPS:
             break
     return out, seq
+
+
+# ---------------------------------------------------------------- 计划体检
+
+# 模型写引用时经常漏掉 `$`（实测：把 `$s2.results` 写成 `" s2.results"`），
+# 于是引用不被识别 → 参数原样变成字符串传进工具 → 那一步必然失败。这里统一补回来。
+_REF_LOOSE = re.compile(r"^\$?\s*s(\d+)\s*((?:\.\w+)*)$")
+
+
+def _fix_refs(obj):
+    """递归把 args 里形如 `s2.results` / `$ s2.results` 的引用归一成 `$s2.results`。"""
+    if isinstance(obj, str):
+        m = _REF_LOOSE.match(obj.strip())
+        if m:
+            return f"$s{m.group(1)}{m.group(2)}"
+        return obj
+    if isinstance(obj, list):
+        return [_fix_refs(v) for v in obj]
+    if isinstance(obj, dict):
+        return {k: _fix_refs(v) for k, v in obj.items()}
+    return obj
+
+
+def _is_blank(v):
+    return v is None or (isinstance(v, str) and not v.strip()) or (isinstance(v, (list, dict)) and not v)
+
+
+def _plan_issues(steps):
+    """体检：挑出"按这个计划跑必然会失败"的地方，返回 [(步骤 id, 问题说明)]。
+
+    只看两类硬伤：① 必填参数空着；② 引用指向不存在或更靠后的步骤。
+    目的不是追求完美计划，而是别让用户点下"开始执行"才发现参数是空的。
+    """
+    issues = []
+    for idx, s in enumerate(steps):
+        spec = A.get(s["tool"]) or {}
+        params = spec.get("params") or {}
+        for k, p in params.items():
+            if not p.get("required"):
+                continue
+            if _is_blank(s["args"].get(k)):
+                issues.append((s["id"], f"必填参数 {k} 是空的"))
+        for k, v in (s["args"] or {}).items():
+            for raw in (v if isinstance(v, list) else [v]):
+                if not isinstance(raw, str):
+                    continue
+                m = re.match(r"^\$s(\d+)(?:\.(\w+))?", raw.strip())
+                if not m:
+                    continue
+                n = int(m.group(1))
+                if n < 1 or n >= idx + 1:      # 只能引用**前面**的步骤
+                    issues.append((s["id"], f"参数 {k} 引用了 $s{n}，但前面没有这一步"))
+                else:
+                    field = m.group(2)
+                    if field:
+                        allowed = A.RETURN_FIELDS.get(steps[n - 1]["tool"])
+                        if allowed and field not in allowed:
+                            issues.append((s["id"],
+                                           f"参数 {k} 引用了 $s{n}.{field}，但第 {n} 步"
+                                           f"（{steps[n-1]['tool']}）只输出：{'、'.join(allowed)}"))
+    return issues
 
 
 def new_task(text, backend="webchat"):
@@ -413,6 +492,37 @@ def plan_task(task_id, log=None):
             steps, seq = _normalize_steps(obj.get("steps"), t, 0)
             if not steps:
                 raise ValueError("模型给出的计划里没有可用步骤（工具名或参数不合法）")
+
+            # 计划体检：有硬伤就回问一次重出（方案里承诺的"不合规直接回问一次"）。
+            # 实测模型会漏掉引用的 `$`、或把该引用上一步的数组参数留空——
+            # 这类计划看起来正常，点执行才发现那一步必然失败。
+            issues = _plan_issues(steps)
+            if issues:
+                _log(t, "计划有 " + str(len(issues)) + " 处问题，回问模型修正一次："
+                        + "；".join(f"{i[0]} {i[1]}" for i in issues[:4]))
+                try:
+                    raw2 = _llm_text(_PLAN_PROMPT.format(task=t["task"],
+                                                         research=(research_question() or "（未填写）"),
+                                                         spec=A.spec_text())
+                                     + _PLAN_FIX.format(issues="\n".join(
+                                         f"- 第 {i[0]} 步：{i[1]}" for i in issues)),
+                                     backend=t.get("backend", "webchat"),
+                                     log=lambda m: _log(t, m), system=_SYS)
+                    steps2, seq2 = _normalize_steps((_first_json_object(raw2) or {}).get("steps"), t, 0)
+                    if steps2 and len(_plan_issues(steps2)) <= len(issues):
+                        steps, seq = steps2, seq2
+                        obj = _first_json_object(raw2) or obj
+                except Exception as e:
+                    _log(t, f"回问修正失败（沿用原计划）：{str(e)[:150]}")
+
+            # 仍有问题的步骤挂个 warning，前端直接提示"去改参数补上"
+            left = {}
+            for sid, msg in _plan_issues(steps):
+                left.setdefault(sid, []).append(msg)
+            for s in steps:
+                if s["id"] in left:
+                    s["warning"] = "；".join(left[s["id"]])[:200]
+
             t["steps"] = steps
             t["seq"] = seq
             t["note"] = (str(obj.get("note") or ""))[:500]
@@ -420,6 +530,8 @@ def plan_task(task_id, log=None):
             _log(t, f"计划已生成，共 {len(steps)} 步"
                     + (f"；其中 {sum(1 for s in steps if s['danger'])} 步需要你确认后才能执行"
                        if any(s["danger"] for s in steps) else ""))
+            if left:
+                _log(t, "注意：有步骤的参数可能不完整（已在卡片上标出），建议先点「改参数」补上再执行")
         except Exception as e:
             t["status"] = "failed"
             t["error"] = f"生成计划失败：{str(e)[:300]}"
@@ -699,7 +811,8 @@ def update_steps(task_id, patches):
                 raise ValueError(f"第 {s['id']} 步已经执行过，不能修改")
             before = json.dumps(s.get("args") or {}, ensure_ascii=False, sort_keys=True)
             if isinstance(p.get("args"), dict):
-                s["args"] = p["args"]
+                s["args"] = _fix_refs(p["args"])     # 用户手填 s2.results 也帮忙补上 $
+
             if (p.get("title") or "").strip():
                 s["title"] = str(p["title"]).strip()[:80]
             after = json.dumps(s.get("args") or {}, ensure_ascii=False, sort_keys=True)
@@ -709,6 +822,7 @@ def update_steps(task_id, patches):
                 s["approved"] = False
             s["danger"] = A.is_danger(s["tool"], s["args"])
             s["impact"] = _safe_impact(s, t["steps"]) if s["danger"] else ""
+            s["warning"] = ""                        # 人工改过就不再用模型的预警来烦人
             if not s["danger"] and s["status"] == "awaiting_confirm":
                 s["status"] = "pending"
             changed.append(s["id"])
