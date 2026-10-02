@@ -15,6 +15,8 @@ mineru_key.txt
 scripts/subscribe/lit_keywords.txt
 archive/
 docs/research/
+# 交接/工作笔记属个人记录，不入库（2026-10-02 起移出跟踪）
+docs/交接文档.md
 # scripts/：只分发通用脚本；含个人研究内容或数据的文件继续排除
 scripts/pipeline/*
 !scripts/pipeline/build_pack.py
@@ -25,6 +27,8 @@ scripts/tags/*
 !scripts/tags/tag_analysis.py
 scripts/subscribe/lit_journals.txt
 webapp/config/domain.json
+# 期刊分区表：中科院 / JCR / 新锐 属**授权数据**，合并结果只留本机，绝不入库
+webapp/config/journal_ranks.csv
 notes/.gitkeep
 reports/.gitkeep
 notes/*
