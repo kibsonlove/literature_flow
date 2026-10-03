@@ -447,7 +447,24 @@ def create_item_from_meta(rec, collection_keys=None, tags=None):
             creators.append(c)
 
     uid = rec.get("uid") or ""
-    extra = "literature_flow 检索入库" + (f"\n{uid}" if uid else "")
+    lines = ["literature_flow 检索入库"]
+    if uid:
+        lines.append(uid)
+    # 分区标注：写进 Extra，**不占标签**——标签留给用户自己的分类习惯，别被机器灌满。
+    # 数据来自用户自备的授权分区表，见 core/journal_ranks.py。
+    rank = rec.get("rank") or {}
+    if rank:
+        try:
+            from core import journal_ranks as _jr
+            s = _jr.summary(rank)
+        except Exception:
+            s = ""
+        if s:
+            lines.append("分区：" + s)
+        detail = "；".join(f"{k}={v}" for k, v in rank.items() if v)
+        if detail:
+            lines.append("分区明细：" + detail)
+    extra = "\n".join(lines)
 
     meta = {
         "title": title,

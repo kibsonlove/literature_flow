@@ -577,6 +577,27 @@
       <label class="radio"><input type="checkbox" id="litFetchPdf" checked> 入库时抓取开放获取全文</label>
     </div>
 
+    <!-- 来源类型：真正决定「结果里会不会全是 arXiv」的开关。
+         注意：OpenAlex 自己就把 arXiv 当来源收录，所以**光取消 arXiv 数据源没用**，
+         得在这里按来源类型过滤。默认期刊+会议，把预印本挤出去。 -->
+    <div class="row lit-opts">
+      <span class="muted">来源类型</span>
+      <label class="radio"><input type="checkbox" id="litTypeJournal" checked> 期刊</label>
+      <label class="radio"><input type="checkbox" id="litTypeConf" checked> 会议（含论文集）</label>
+      <label class="radio"><input type="checkbox" id="litTypePre"> 预印本（arXiv）</label>
+      <span class="muted">分区</span>
+      <select id="litRankFilter" style="max-width:150px">
+        <option value="">不限</option>
+        <option value="cas1">中科院 1 区</option>
+        <option value="cas12">中科院 1–2 区</option>
+        <option value="xinrui12">新锐 1–2 区</option>
+        <option value="q1">JCR Q1</option>
+        <option value="hasrank">只要有分区</option>
+        <option value="norank">只看没分区的</option>
+      </select>
+      <span class="muted" id="litRankInfo"></span>
+    </div>
+
     <div class="lit-step">
       <span class="lit-stepno">3</span>
       <span class="lit-steptitle">检索并入库</span>

@@ -17,6 +17,16 @@ SETTINGS_PATH = os.path.join(CONFIG_DIR, "settings.json")
 PATHS_PATH = os.path.join(CONFIG_DIR, "paths.json")
 EMBEDDING_PATH = os.path.join(CONFIG_DIR, "embedding.json")
 
+
+def journal_ranks_path():
+    """期刊分区表（中科院 / JCR / 新锐）的合并结果。
+
+    数据源由用户自备（属**授权数据**），合并结果只留本机、已进 .gitignore，绝不入库。
+    路径与其它 config 文件同级；按项目约定一律用函数读，不要 import 模块级常量。
+    """
+    return os.path.join(CONFIG_DIR, "journal_ranks.csv")
+
+
 # 等待 Zotero 本地 API 就绪的最长秒数
 ZOTERO_WAIT_SECONDS = 60
 

@@ -1161,6 +1161,15 @@ $("litBtn").onclick = async () => {
 };
 $("litClose").onclick = () => $("litPanel").classList.add("hidden");
 
+// 来源类型勾选 → API 值。默认勾的就是「期刊 + 会议」，与后端默认保持一致。
+function litSourceTypes() {
+  const t = [];
+  if ($("litTypeJournal").checked) t.push("journal");
+  if ($("litTypeConf").checked) t.push("conference");
+  if ($("litTypePre").checked) t.push("preprint");
+  return t;
+}
+
 function litForm() {
   const sources = [];
   if ($("litSrcOA").checked) sources.push("openalex");
@@ -1172,6 +1181,7 @@ function litForm() {
     queries: $("litQueries").value.split("\n").map((s) => s.trim()).filter(Boolean),
     since: $("litSince").value.trim(),
     sources: sources,
+    source_types: litSourceTypes(),
     per_page: parseInt($("litPer").value, 10) || 100,
     sort: $("litSort").value,
     collection: $("litCollection").value.trim(),
@@ -1215,6 +1225,12 @@ function litApplyTopic(t) {
   const src = t.sources || ["openalex"];
   $("litSrcOA").checked = src.indexOf("openalex") >= 0;
   $("litSrcAX").checked = src.indexOf("arxiv") >= 0;
+  // 旧配置里没有 source_types 字段 → 按新默认（期刊+会议）填，避免读进来一份残配置后
+  // 界面表现和新默认不一致。
+  const st = t.source_types || ["journal", "conference"];
+  $("litTypeJournal").checked = st.indexOf("journal") >= 0;
+  $("litTypeConf").checked = st.indexOf("conference") >= 0;
+  $("litTypePre").checked = st.indexOf("preprint") >= 0;
   if (t.sort && $("litSort").querySelector(`option[value="${t.sort}"]`)) $("litSort").value = t.sort;
   litCfgState();
   return true;
@@ -1371,9 +1387,11 @@ $("litRun").onclick = async () => {
   const form = litForm();
   if (!form.queries.length) { $("litStatus").textContent = "请先填写至少一条检索式"; return; }
   if (!form.sources.length) { $("litStatus").textContent = "请至少选择一个数据源"; return; }
+  if (!form.source_types.length) { $("litStatus").textContent = "请至少选择一个来源类型（期刊 / 会议 / 预印本）"; return; }
   $("litRun").disabled = true;
   litShowWarn(null);
-  $("litStatus").textContent = "检索中…（多检索式 × 多数据源，约需 30–60 秒；arXiv 官方要求 3 秒间隔，属正常）";
+  const tl = litSourceTypes().map((t) => ({ journal: "期刊", conference: "会议", preprint: "预印本" }[t])).join("+");
+  $("litStatus").textContent = `检索中…（来源类型：${tl}；多检索式 × 多数据源，约需 30–60 秒；arXiv 官方要求 3 秒间隔，属正常）`;
   $("litLog").textContent = "检索中…";
   try {
     const r = await postJSON("/api/lit/search", form);
@@ -1382,9 +1400,12 @@ $("litRun").onclick = async () => {
     litSave();
     litShowWarn(r.degraded);
     $("litLog").textContent = (r.log || []).concat(r.errors || []).join("\n") || "（无日志）";
+    const nr = litResults.filter((x) => x.rank && Object.keys(x.rank).length).length;
+    const rankBit = nr ? `，其中 ${nr} 条查到分区` : "（分区表未加载或无匹配）";
     $("litStatus").textContent = (r.degraded || []).length
-      ? `检索完成，命中 ${litResults.length} 条 —— 有数据源未响应，结果不完整`
-      : `检索完成，命中 ${litResults.length} 条`;
+      ? `检索完成，命中 ${litResults.length} 条${rankBit} —— 有数据源未响应，结果不完整`
+      : `检索完成，命中 ${litResults.length} 条${rankBit}`;
+    if (r.ranks) litRankInfo(r.ranks);
   } catch (e) {
     $("litStatus").textContent = "检索失败：" + e.message;
   } finally {
@@ -1392,12 +1413,37 @@ $("litRun").onclick = async () => {
   }
 };
 
-// 可见行：勾了「隐藏已在库」就过滤掉已入库的。
+// 分区表状态提示（面板里那一行小字）
+function litRankInfo(s) {
+  const el = $("litRankInfo");
+  if (!el) return;
+  el.textContent = (s && s.available) ? `分区表 ${s.entries} 条` : "未装分区表";
+  el.title = (s && s.available)
+    ? `中科院 / JCR / 新锐（${s.entries} 条，四表全有 ${s.all_four} 条）\n来源：${s.path}`
+    : "把合并好的 journal_ranks.csv 放到 webapp/config/ 下即可启用分区标注";
+}
+
+// 可见行：先按「隐藏已在库」过滤，再按「分区」筛选。
 // 注意 data-i 仍写原始下标，这样勾选/勾全选与实际数组始终对得上。
 function litVisibleIdx() {
   const hide = $("litHideLib").checked;
+  const rule = ($("litRankFilter") || {}).value || "";
+  const num = (v) => parseInt(String(v || "").replace(/\D/g, ""), 10) || 9;
+  const pass = (x) => {
+    const rk = x.rank || {};
+    const rankNum = (k) => parseInt(String(rk[k] || "").replace(/\D/g, ""), 10) || 0;
+    switch (rule) {
+      case "cas1": return rankNum("中科院2025") === 1;
+      case "cas12": { const n = rankNum("中科院2025"); return n === 1 || n === 2; }
+      case "xinrui12": { const n = rankNum("新锐分区"); return n === 1 || n === 2; }
+      case "q1": return (rk["JCR分区"] || "").toUpperCase() === "Q1";
+      case "hasrank": return Object.keys(rk).length > 0;
+      case "norank": return Object.keys(rk).length === 0;
+      default: return true;
+    }
+  };
   const out = [];
-  litResults.forEach((x, i) => { if (!(hide && x.in_library)) out.push(i); });
+  litResults.forEach((x, i) => { if (!(hide && x.in_library) && pass(x)) out.push(i); });
   return out;
 }
 
@@ -1456,6 +1502,24 @@ function litRowHtml(x, i) {
   chips.push(x.oa_url
     ? '<span class="lit-chip oa">可下载全文</span>'
     : '<span class="lit-chip nooa">无全文</span>');
+  // 载体类型（期刊/会议/预印本）——这正是「来源类型」过滤在管的东西，标出来才看得见
+  const VT = { journal: "期刊", conference: "会议", repository: "预印本", "book series": "论文集" };
+  if (VT[x.venue_type]) chips.push(`<span class="lit-chip vt">${VT[x.venue_type]}</span>`);
+  // 分区（新锐 / 中科院 / JCR 都标，鼠标悬停看明细）
+  const rk = x.rank || {};
+  const rankKeys = Object.keys(rk);
+  if (rankKeys.length) {
+    const short = [];
+    if (rk["中科院2025"]) short.push(`中科院${rk["中科院2025"]}区`);
+    if (rk["新锐分区"]) short.push(`新锐${rk["新锐分区"]}`);
+    if (rk["JCR分区"]) short.push(`JCR ${rk["JCR分区"]}`);
+    const detail = rankKeys.map((k) => `${k}：${rk[k]}`).join("\n");
+    const tier = parseInt(String(rk["中科院2025"] || "").replace(/\D/g, ""), 10) || 0;
+    const cls = tier === 1 ? " is-top" : (tier ? "" : " is-plain");
+    chips.push(`<span class="lit-chip rank${cls}" title="${escapeHtml(detail)}">${escapeHtml(short.join(" · "))}</span>`);
+  } else if (x.venue) {
+    chips.push('<span class="lit-chip rank is-none" title="分区表里查不到这本刊：多半未被 SCI 收录（新刊 / 掠夺刊），或它不是期刊（预印本、会议）">无分区</span>');
+  }
   if (x.in_library) chips.push('<span class="lit-chip lib">已在库</span>');
   const doiLink = x.doi
     ? ` · <a href="https://doi.org/${encodeURIComponent(x.doi)}" target="_blank" rel="noopener">DOI</a>`
@@ -1501,6 +1565,18 @@ $("litSelAll").onchange = () => {
 };
 
 $("litHideLib").onchange = () => { litDraw(true); litSave(); };
+
+// 分区筛选是**显示期**过滤（不动检索结果本身），所以切一下只重画表格。
+$("litRankFilter").onchange = () => {
+  litDraw(true);
+  const n = litVisibleIdx().length;
+  $("litStatus").textContent = `已按分区筛选：当前可见 ${n} 条 / 共 ${litResults.length} 条`;
+};
+
+// 分区表装在不在、多少条 —— 打开面板时问一次，显示在那一行小字里。
+(function loadLitRankInfo() {
+  fetch("/api/journal_ranks").then((r) => r.json()).then(litRankInfo).catch(() => litRankInfo(null));
+})();
 
 $("litClearCache").onclick = () => {
   if (litResults.length
@@ -1598,12 +1674,21 @@ $("litImport").onclick = async () => {
 $("litExport").onclick = () => {
   if (!litResults.length) { $("litStatus").textContent = "还没有检索结果可导出"; return; }
   const cell = (v) => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`;
-  const head = ["年份", "标题", "作者", "载体", "来源", "被引", "DOI", "OA链接", "已在库", "命中检索式"];
-  const rows = litResults.map((x) => [
-    x.year || "", x.title || "", (x.authors || []).join("; "), x.venue || "",
-    x.source === "arxiv" ? "arXiv" : "OpenAlex", x.cited_by || 0, x.doi || "",
-    x.oa_url || "", x.in_library ? "是" : "否", x.via || "",
-  ].map(cell).join(","));
+  const head = ["年份", "标题", "作者", "载体", "载体类型", "来源", "被引", "DOI",
+                "中科院分区", "新锐分区", "JCR分区", "JIF", "JIF百分位", "分区摘要",
+                "OA链接", "已在库", "命中检索式"];
+  const VT = { journal: "期刊", conference: "会议", repository: "预印本", "book series": "论文集" };
+  const rows = litResults.map((x) => {
+    const rk = x.rank || {};
+    return [
+      x.year || "", x.title || "", (x.authors || []).join("; "), x.venue || "",
+      VT[x.venue_type] || x.venue_type || "",
+      x.source === "arxiv" ? "arXiv" : "OpenAlex", x.cited_by || 0, x.doi || "",
+      rk["中科院2025"] ? rk["中科院2025"] + "区" : "", rk["新锐分区"] || "", rk["JCR分区"] || "",
+      rk["JIF"] || "", rk["JIF百分位"] || "", x.rank_label || "",
+      x.oa_url || "", x.in_library ? "是" : "否", x.via || "",
+    ].map(cell).join(",");
+  });
   const csv = "\ufeff" + [head.map(cell).join(",")].concat(rows).join("\r\n");
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));

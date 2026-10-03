@@ -1856,3 +1856,40 @@ summary svg { width: 1.05em; height: 1.05em; flex: none; }
    -------------------------------------------------------------------------- */
 .pill.is-api { background: var(--c-warn-soft); color: var(--c-warn); border: 1px solid var(--c-warn-line); font-weight: 600; }
 .pill.is-backend { background: var(--c-bg-sunken); color: var(--c-muted); border: 1px solid var(--c-line); }
+
+/* --------------------------------------------------------------------------
+   26. 检索结果里的「载体类型」与「分区」小标
+   （2026-10-02：来源类型过滤 + 三套分区标注；分区数据来自用户自备的授权表）
+   -------------------------------------------------------------------------- */
+.lit-chip.vt {
+  background: var(--c-bg-sunken);
+  color: var(--c-ink-2);
+  border: 1px solid var(--c-line);
+}
+
+.lit-chip.rank {
+  background: var(--c-primary-soft);
+  color: var(--c-primary-strong);
+  border: 1px solid var(--c-primary-line);
+  font-weight: 500;
+}
+
+/* 中科院 1 区：唯一给强调色的档位，其余保持安静——否则整列都在喊 */
+.lit-chip.rank.is-top {
+  background: var(--c-warn-soft);
+  color: var(--c-warn);
+  border-color: var(--c-warn-line);
+}
+
+.lit-chip.rank.is-plain {
+  background: var(--c-bg-sunken);
+  color: var(--c-muted);
+  border-color: var(--c-line);
+}
+
+/* 查不到分区：虚线弱化。这本是有用信号（多为未被 SCI 收录），但不必抢眼 */
+.lit-chip.rank.is-none {
+  background: transparent;
+  color: var(--c-muted);
+  border: 1px dashed var(--c-line-strong);
+}

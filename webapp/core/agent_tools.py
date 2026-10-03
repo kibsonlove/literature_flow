@@ -95,22 +95,32 @@ def _t_lit_search(args, ctx):
     if not sources:
         sources = ["openalex", "arxiv"]
     try:
-        from . import litsearch
+        from . import litsearch, journal_ranks
+        # 来源类型：不写就用默认（期刊+会议）——必须与「文献检索」面板一致，
+        # 否则同一条检索式在两条路上会给出完全不同的结果集。
+        st = args.get("source_types")
+        st = litsearch.DEFAULT_SOURCE_TYPES if st is None else [
+            t for t in _as_list(st) if t in litsearch.SRC_TYPE_GROUPS]
         recs, errors, status = litsearch.run_search(
             queries, since=(args.get("since") or "").strip() or None, sources=sources,
             per_page=int(args.get("per_page") or 50),
-            sort=args.get("sort") or "relevance", log=ctx.log)
+            sort=args.get("sort") or "relevance", log=ctx.log, source_types=st)
         litsearch.mark_in_library(recs)
+        journal_ranks.attach(recs, log=ctx.log)
     except Exception as e:
         return _err("lit_search", f"检索失败：{repr(e)[:150]}")
     degraded = [f"{k}: {v.get('reason')}" for k, v in (status or {}).items() if v.get("failed")]
     n_lib = sum(1 for r in recs if r.get("in_library"))
-    msg = f"检索到 {len(recs)} 条（{'+'.join(sources)}，其中 {n_lib} 条已在库）"
+    n_rank = sum(1 for r in recs if r.get("rank"))
+    types_label = "+".join(litsearch.SRC_TYPE_LABEL.get(t, t) for t in st) or "不过滤"
+    msg = (f"检索到 {len(recs)} 条（{'+'.join(sources)}；来源类型 {types_label}；"
+           f"其中 {n_lib} 条已在库、{n_rank} 条查到了分区）")
     if degraded:
         msg += "；部分数据源失败：" + "；".join(degraded)
     return _ok("lit_search", msg,
                {"count": len(recs), "results": recs, "queries": queries,
-                "in_library": n_lib, "degraded": degraded})
+                "in_library": n_lib, "n_ranked": n_rank, "source_types": st,
+                "degraded": degraded})
 
 
 def _t_lit_import(args, ctx):
@@ -400,13 +410,19 @@ TOOLS = [
         "title": "文献检索",
         "category": "文献情报",
         "description": "按布尔检索式在 OpenAlex（期刊/会议）与 arXiv（预印本）检索文献，"
-                       "返回标题/作者/年份/DOI/摘要/是否已在库等。只读，不写库。",
+                       "返回标题/作者/年份/DOI/摘要/是否已在库，以及**期刊分区**"
+                       "（中科院 / JCR / 新锐，查不到就是空）。只读，不写库。",
         "params": {
             "queries": {"type": "array<string>", "required": True,
                         "desc": "检索式列表；支持 AND/OR/NOT 与双引号短语；可写 \"$s1.queries\" 引用上一步结果"},
             "since": {"type": "string", "required": False, "desc": "起始年，如 2021"},
             "sources": {"type": "array<string>", "required": False, "enum": ["openalex", "arxiv"],
-                        "desc": "默认两个都查"},
+                        "desc": "默认两个都查；注意 arXiv 是预印本库，排除预印本时会自动跳过它"},
+            "source_types": {"type": "array<string>", "required": False,
+                             "enum": ["journal", "conference", "preprint"],
+                             "desc": "来源类型过滤。**不写默认 [journal, conference]**（即排除预印本，"
+                                     "避免结果全是 arXiv）；想连预印本一起要就显式写上 preprint。"
+                                     "注意：过滤会同时排除没有来源记录的条目"},
             "per_page": {"type": "int", "required": False, "desc": "每条检索式取多少条，默认 50"},
             "sort": {"type": "string", "required": False, "enum": ["relevance", "citations", "date"]},
         },

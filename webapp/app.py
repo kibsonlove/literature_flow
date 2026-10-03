@@ -340,14 +340,22 @@ def lit_delete_topic(payload: dict):
 
 @app.post("/api/lit/search")
 def lit_search(payload: dict):
-    """文献检索。payload: {queries[], since, sources[], per_page}"""
-    from core import litsearch
+    """文献检索。payload: {queries[], since, sources[], per_page, sort, source_types[]}
+
+    `source_types` = 来源类型过滤（journal / conference / preprint）：
+      - 传了就按它过滤；**不传则用默认值**（期刊+会议）——保证面板与智能体两条路默认一致；
+      - 传空列表 = 不过滤（旧行为）。
+    返回的每条 result 都带 `rank` / `rank_label`（分区查不到就是空值）。
+    """
+    from core import litsearch, journal_ranks
     queries = [q for q in (payload.get("queries") or []) if q and q.strip()]
     if not queries:
         raise HTTPException(400, "请至少填写一条检索式")
     sources = [s for s in (payload.get("sources") or ["openalex"]) if s in ("openalex", "arxiv")]
     if not sources:
         raise HTTPException(400, "请至少选择一个数据源")
+    st = payload.get("source_types", litsearch.DEFAULT_SOURCE_TYPES)
+    st = [t for t in (st or []) if t in litsearch.SRC_TYPE_GROUPS]
     since = (payload.get("since") or "").strip()
     sort = payload.get("sort") or "relevance"
     logs = []
@@ -355,8 +363,9 @@ def lit_search(payload: dict):
         recs, errors, status = litsearch.run_search(
             queries, since=since or None, sources=sources,
             per_page=int(payload.get("per_page") or 25),
-            sort=sort, log=logs.append)
+            sort=sort, log=logs.append, source_types=st)
         litsearch.mark_in_library(recs)
+        journal_ranks.attach(recs, log=logs.append)      # 逐条挂分区
     except Exception as e:
         raise HTTPException(500, f"检索失败：{repr(e)[:150]}")
     # 有源失败时必须显式告知（否则用户看不出结果少了一半）
@@ -366,7 +375,15 @@ def lit_search(payload: dict):
     if sort == "citations" and "arxiv" in sources and status.get("openalex", {}).get("failed"):
         degraded.append("arXiv 不提供被引数，被引排序已失真，建议改用「相关度」或「最新」")
     return {"count": len(recs), "results": recs, "errors": errors, "log": logs,
-            "status": status, "degraded": degraded}
+            "status": status, "degraded": degraded, "source_types": st,
+            "ranks": journal_ranks.stats()}
+
+
+@app.get("/api/journal_ranks")
+def journal_ranks_info():
+    """分区表状态（只读）：前端用来提示「已加载 N 条」还是「未安装」。"""
+    from core import journal_ranks
+    return journal_ranks.stats()
 
 
 @app.post("/api/lit/expand")

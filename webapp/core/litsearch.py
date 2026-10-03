@@ -230,6 +230,8 @@ def _norm_openalex(w):
         "year": w.get("publication_year"),
         "venue": src.get("display_name") or "",
         "venue_type": src.get("type") or "",
+        # 期刊的 ISSN-L：分区表精确匹配靠它（刊名去空格后仍有极小概率撞名）
+        "issn": src.get("issn_l") or "",
         "doi": (w.get("doi") or "").replace("https://doi.org/", ""),
         "url": loc.get("landing_page_url") or w.get("doi") or "",
         "oa_url": oa_url,
@@ -261,6 +263,7 @@ def _norm_arxiv(entry):
         "year": year,
         "venue": "arXiv",
         "venue_type": "repository",
+        "issn": "",
         "doi": (entry.findtext("arxiv:doi", "", _NS) or "").strip(),
         "url": eid,
         "oa_url": pdf,
@@ -276,10 +279,26 @@ def _norm_arxiv(entry):
 
 # ---------- 单源检索 ----------
 
-def search_openalex(query, since=None, per_page=100, sort=None):
+def _oa_source_filter(source_types=None):
+    """把界面上的「来源类型」勾选翻成 OpenAlex 的 source.type 过滤值（`|` = 或）。
+
+    取值只认下面这三组；传空/None 表示**不过滤**（保持旧行为）。
+    ⚠ 实测注意：`primary_location.source.type:book series` 单独用**匹配不到**，
+    必须与别的值用 `|` 连起来才生效（`journal|conference|book series` 正常）。
+    另外过滤会把「没有 primary_location.source 记录」的条目一并排掉
+    （实测约占 1/3，有些老论文/论文集在 OpenAlex 里就是没有来源记录）。
+    """
+    vals = []
+    for t in source_types or []:
+        vals += SRC_TYPE_GROUPS.get(t, [])
+    return "|".join(dict.fromkeys(vals))
+
+
+def search_openalex(query, since=None, per_page=100, sort=None, source_types=None):
     """OpenAlex 检索。query 走 title_and_abstract.search（比全文字段精确）。
 
     per_page 默认 100（官方上限）—— 计费按请求次数，与条数无关，所以取满最划算。
+    source_types 见 SRC_TYPE_GROUPS；不传则不加来源过滤。
     """
     expr = (query or "").strip()
     if not expr:
@@ -287,6 +306,9 @@ def search_openalex(query, since=None, per_page=100, sort=None):
     flt = f"title_and_abstract.search:{expr}"
     if since:
         flt += f",from_publication_date:{since}"
+    sf = _oa_source_filter(source_types)
+    if sf:
+        flt += f",primary_location.source.type:{sf}"
     params = {"filter": flt, "per-page": str(max(1, min(int(per_page), 200)))}
     if sort:
         params["sort"] = sort
@@ -364,7 +386,7 @@ def _title_key(s):
 def _merge(dst, src):
     if src["source"] not in ([dst["source"]] + dst["also"]):
         dst["also"].append(src["source"])
-    for k in ("oa_url", "doi", "venue", "abstract"):
+    for k in ("oa_url", "doi", "venue", "issn", "abstract"):
         if not dst.get(k) and src.get(k):
             dst[k] = src[k]
     # 候选链接要合并，不是"缺了才补"：两个源各自找到的开放位置都值得留着试
@@ -416,6 +438,21 @@ SORT_MODES = {
 
 SRC_LABEL = {"openalex": "OpenAlex", "arxiv": "arXiv"}
 
+# ---------- 来源类型（解决"结果全是 arXiv"）----------
+# 背景：OpenAlex 自己就把 arXiv 当"来源"收录，所以**光把 arXiv 这个数据源关掉没用**，
+# 预印本照样灌进来（实测用户那轮 347 条里，180 条 OpenAlex 结果中有 41 条载体是 repository、
+# 48 条 OA 链接指向 arxiv.org）。真正的开关是 `primary_location.source.type`。
+# 界面只暴露三档，各自展开成 OpenAlex 的实际取值：
+#   conference 里带上 `book series`——计算机领域的会议论文集（LNCS / ACL / AAAI 等）多归这一类，
+#   漏了它 CS 方向的会议论文会大面积消失。
+SRC_TYPE_LABEL = {"journal": "期刊", "conference": "会议", "preprint": "预印本"}
+SRC_TYPE_GROUPS = {
+    "journal": ["journal"],
+    "conference": ["conference", "book series"],
+    "preprint": ["repository"],
+}
+DEFAULT_SOURCE_TYPES = ["journal", "conference"]     # 默认：期刊 + 会议，把 arXiv 挤出去
+
 
 # 各源的最小请求间隔（秒）。arXiv 官方 API 指南明确要求"每 3 秒不超过 1 次请求"，
 # 而 OpenAlex 是每秒 100 次的宽松限制 —— 用同一个间隔要么拖慢 OpenAlex，要么撞死 arXiv。
@@ -423,11 +460,15 @@ SRC_GAP = {"openalex": 0.5, "arxiv": 3.0}
 
 
 def run_search(queries, since=None, sources=("openalex", "arxiv"), per_page=100,
-               sort="relevance", log=None, gap=None):
+               sort="relevance", log=None, gap=None, source_types=None):
     """跑一轮完整检索：多检索式 × 多源 → 去重 → 排序。
 
     返回 (records, errors, status)。status 每个源带 hits / failed / reason / skipped，
     失败时 failed=True —— **上层必须把 failed 显式告知用户**，否则会静默少一半结果。
+
+    `source_types`：来源类型过滤（见 SRC_TYPE_GROUPS）。传 None = 不过滤（旧行为）。
+    传了且不含 `preprint` 时，**arXiv 数据源直接跳过**——它本身就是预印本库，
+    不然等于查了一遍又全被过滤掉，白花额度。
 
     限流对策：按源留间隔（见 SRC_GAP：arXiv 3s / OpenAlex 0.5s，各自的官方要求不同）；
     遇 429 立即熔断该源，不再对剩下的检索式硬撞；其它错误连续两条也熔断。
@@ -436,6 +477,12 @@ def run_search(queries, since=None, sources=("openalex", "arxiv"), per_page=100,
         sort = "relevance"
     since = normalize_since(since) or None
     oa_sort = SORT_MODES[sort]
+    sources = list(sources)
+
+    if source_types is not None and "preprint" not in source_types and "arxiv" in sources:
+        sources = [s for s in sources if s != "arxiv"]
+        if log:
+            log("已按「来源类型」排除预印本 → 跳过 arXiv 数据源")
 
     qs = [x.strip() for x in (queries or []) if x and x.strip()]
     status = {s: {"hits": 0, "failed": False, "reason": "", "skipped": 0} for s in sources}
@@ -444,7 +491,8 @@ def run_search(queries, since=None, sources=("openalex", "arxiv"), per_page=100,
 
     def _call(src, q):
         if src == "openalex":
-            return search_openalex(q, since=since, per_page=per_page, sort=oa_sort)
+            return search_openalex(q, since=since, per_page=per_page, sort=oa_sort,
+                                   source_types=source_types)
         return search_arxiv(q, since=since, max_results=per_page)
 
     for qi, q in enumerate(qs):
