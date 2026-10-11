@@ -251,8 +251,11 @@
     var hintTxt = p.desc ? '<span class="agf-hint">' + esc(p.desc) + "</span>" : "";
     if (p.required) hintTxt = '<span class="agf-hint">必填</span>' + hintTxt;
     if (typeof val === "string" && REF_RE.test(val.trim())) {
+      // data-arg/data-kind 必须带上：保存时 collectArgs 只收集带 data-arg 的控件，
+      // 漏了会把只读引用从 args 里悄悄丢掉，下一步就会"缺少必填参数"（2026-10-02 实测）。
       return '<label class="agf-row is-ref" for="' + id + '">' + label
-        + '<input id="' + id + '" type="text" value="' + esc(val) + '" data-ref="1" readonly>'
+        + '<input id="' + id + '" type="text" value="' + esc(val) + '" data-ref="1"'
+        + ' data-arg="' + esc(key) + '" data-kind="string" readonly>'
         + '<span class="agf-hint">自动引用：' + esc(refLabel(val, t)) + "（" + esc(val.trim())
         + "）——由前面那一步算完自动带过来，不用手改</span></label>";
     }
@@ -271,8 +274,12 @@
       var arr = (typeOf(val) === "[object Array]") ? val : [];
       var onlyStr = arr.every(function (x) { return typeof x === "string"; });
       if (!onlyStr) {
+        // 只读对象数组（上一步结果整体带过来的）：用隐藏 input 原样带回，
+        // 否则保存表单会把这类参数整个丢掉（与引用型丢参数同一个坑）。
         return '<div class="agf-row is-ref">' + label
           + '<div class="agf-readonly">' + esc(JSON.stringify(val)) + "</div>"
+          + '<input type="hidden" data-arg="' + esc(key) + '" data-kind="json"'
+          + ' value="' + esc(JSON.stringify(val)) + '">'
           + '<span class="agf-hint">由前面步骤的结果自动带入，不能手改；想换内容就改用前面那一步</span></div>';
       }
       return '<label class="agf-row" for="' + id + '">' + label
@@ -544,6 +551,10 @@
     li.querySelectorAll("[data-arg]").forEach(function (inp) {
       var k = inp.dataset.arg, kind = inp.dataset.kind;
       if (kind === "bool") args[k] = !!inp.checked;
+      else if (kind === "json") {
+        // 隐藏 input 里的只读对象/数组（上一步结果自动带入的），原样解析回去
+        try { args[k] = JSON.parse(inp.value); } catch (e) { /* 解析失败就不带，后端有兜底 */ }
+      }
       else if (kind === "int") {
         var n = parseInt(inp.value, 10);
         args[k] = isNaN(n) ? inp.value : n;

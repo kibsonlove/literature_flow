@@ -125,8 +125,8 @@ echo.
 echo       Done. The next step is optional.
 echo       The webchat backend drives a real browser, which needs a one-time
 echo       download of about 150 MB. Skip it if you plan to use an API key.
-set /p PW=Download the browser engine now? [Y/N] 
-if /i "%PW%"=="Y" venv\Scripts\python.exe -m playwright install chromium
+set /p PW=Download the browser engine now? [Y/N]
+if /i "%PW%"=="Y" call :install_browser
 
 echo.
 echo [4/4] Looking for Zotero...
@@ -157,3 +157,27 @@ echo  Check your network or proxy settings, then run setup.bat again.
 echo.
 pause
 exit /b 1
+
+:install_browser
+REM The default download host (Google CDN) is unreachable or unstable on many
+REM networks. Try the npmmirror CDN first, then fall back to the default.
+echo       Trying the npmmirror CDN (faster on mainland networks)...
+set "PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright"
+venv\Scripts\python.exe -m playwright install chromium
+if not errorlevel 1 goto install_browser_ok
+echo.
+echo       Mirror download failed. Retrying with the default download host...
+set "PLAYWRIGHT_DOWNLOAD_HOST="
+venv\Scripts\python.exe -m playwright install chromium
+if not errorlevel 1 goto install_browser_ok
+echo.
+echo  WARNING: the browser engine could not be downloaded right now.
+echo  The webchat backend needs it. Later, run:
+echo      venv\Scripts\python.exe -m playwright install chromium
+echo  (re-run it when the network is better; it can resume a failed download)
+echo.
+goto :eof
+
+:install_browser_ok
+echo       Browser engine installed.
+goto :eof

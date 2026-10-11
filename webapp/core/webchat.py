@@ -1064,6 +1064,10 @@ class WebChatTextSession:
         if fresh:
             _maybe_new_chat(self.page, say=self.log, base_url=self.url)
             _ensure_fresh_chat(self.page, self.url, say=self.log)
+        # 深度思考也要在文本通道（计划/检索式生成等）开启——2026-10-02 补：
+        # 之前只有 PDF 精读通道开了，新机器上的用户反馈网页端出计划没走深度思考。
+        # 找不到开关只记日志，不影响流程（其它网页端 LLM 可能没有这个按钮）。
+        _enable_deep_think(self.page, say=self.log)
         return self
 
     def ask(self, text, timeout=600):

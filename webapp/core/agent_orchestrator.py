@@ -933,7 +933,14 @@ def update_steps(task_id, patches):
                 raise ValueError(f"第 {s['id']} 步已经执行过，不能修改")
             before = json.dumps(s.get("args") or {}, ensure_ascii=False, sort_keys=True)
             if isinstance(p.get("args"), dict):
-                s["args"] = _fix_refs(p["args"])     # 用户手填 s2.results 也帮忙补上 $
+                new_args = _fix_refs(p["args"])
+                # 兜底（2026-10-02）：旧参数里是 $sN 引用、这次补丁里没带的，
+                # 原样保留。引用丢了这一步必然"缺少必填参数"——宁可不让用户
+                # 在表单里"删掉"一个引用（那从来不是合理操作），也不让计划静默残废。
+                for k, v in (s.get("args") or {}).items():
+                    if k not in new_args and isinstance(v, str) and v.strip().startswith("$s"):
+                        new_args[k] = v
+                s["args"] = new_args
 
             if (p.get("title") or "").strip():
                 s["title"] = str(p["title"]).strip()[:80]
