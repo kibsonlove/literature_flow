@@ -87,3 +87,13 @@ def list_reports():
                 out.append({"name": f, "size": os.path.getsize(p),
                             "mtime": int(os.path.getmtime(p) * 1000)})
     return out
+
+
+def availability():
+    """报告每个工具所需的脚本是否随仓库分布，供前端隐藏缺脚本的按钮。
+
+    只判断文件在不在，不执行任何脚本。返回 {tool: True/False}。
+    背景：部分个人分析脚本默认不入库，下载者本地点了那些按钮只会拿到"脚本未找到"。
+    """
+    return {tool: os.path.isfile(os.path.join(ROOT, script))
+            for tool, (script, _mutating) in TOOLS.items()}

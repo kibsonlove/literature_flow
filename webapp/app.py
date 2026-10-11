@@ -304,6 +304,13 @@ def tool_reports():
     return tools.list_reports()
 
 
+@app.get("/api/tool/availability")
+def tool_availability():
+    """哪些工具箱脚本随仓库分布。前端据此隐藏缺脚本的按钮（部分个人脚本默认不入库）。"""
+    from core import tools
+    return {"tools": tools.availability()}
+
+
 @app.post("/api/tool/run")
 def post_tool_run(payload: dict):
     """运行白名单维护脚本。payload: {tool, apply?}——变更类脚本需 apply=True 且前端已确认。"""

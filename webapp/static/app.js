@@ -933,6 +933,25 @@ $("toolDedupApply").onclick = () => runTool("dedup", true,
 $("toolTagMergeApply").onclick = () => runTool("tag_merge", true,
   "将按归并方案实际修改 Zotero 中的标签。\n确认已审阅过清单并要执行？");
 
+// 缺脚本的工具按钮直接隐藏：部分个人分析脚本默认不随仓库分发，
+// 按钮留着的话，下载者点了只会拿到"脚本未找到"。以后端 availability 为准。
+const TOOL_BTNS = {
+  lit_watch: ["toolLitWatch"], coverage: ["toolCoverage"], digest: ["toolDigest"],
+  pack: ["toolPack"], tag_analysis: ["toolTagScan"], verify_tags: ["toolTagVerify"],
+  dedup: ["toolDedup", "toolDedupApply"], tag_merge: ["toolTagMerge", "toolTagMergeApply"],
+};
+(async () => {
+  try {
+    const r = await (await fetch("/api/tool/availability")).json();
+    const avail = (r && r.tools) || {};
+    for (const k in TOOL_BTNS) {
+      if (avail[k] === false) {
+        TOOL_BTNS[k].forEach((id) => { const el = $(id); if (el) el.classList.add("hidden"); });
+      }
+    }
+  } catch (e) {}
+})();
+
 async function loadToolReports() {
   try {
     const rows = await (await fetch("/api/tool/reports")).json();
