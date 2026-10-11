@@ -20,6 +20,7 @@ docs/交接文档.md
 # scripts/：只分发通用脚本；含个人研究内容或数据的文件继续排除
 scripts/pipeline/*
 !scripts/pipeline/build_pack.py
+!scripts/pipeline/build_journal_ranks.py
 scripts/dedup/*
 !scripts/dedup/dedup_plan.py
 !scripts/dedup/zot_dedup.py
