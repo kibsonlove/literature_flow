@@ -6,9 +6,8 @@
     （不给 -o 时输出到 webapp/config/journal_ranks.csv）
 
 为什么需要自己合并
-    分区表是**授权数据**（科睿唯安 JCR / 中科院分区 / 新锐分区），本项目**不分发**它，
-    也不分发合并结果（webapp/config/journal_ranks.csv 已在 .gitignore 里）。
-    你从正规渠道拿到官方 xlsx 后，在本机跑这个脚本生成自己的表即可。
+    官方导出的 xlsx 是 4 张表混在一起、表头不在首行、刊名三套写法，程序不能直接拿来用；
+    这个脚本把它归一成一张 webapp/config/journal_ranks.csv，供 core/journal_ranks.py 读取。
 
 源表结构（4 个工作表；**表头不在第 1 行**，脚本自动定位含关键词的那一行）
     2026新锐期刊分区表        刊名 | ISSN | EISSN | 新锐分区 | TOP        ← 「英文名/中文名」是**学科**，不是刊名
@@ -36,6 +35,11 @@ import re
 import sys
 
 import openpyxl
+
+# 项目根（本文件在 scripts/pipeline/ 下，往上三层）。
+# 路径一律 __file__ 相对解析 —— 不写死任何绝对路径。
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+DEFAULT_OUT = os.path.join(ROOT, "webapp", "config", "journal_ranks.csv")
 
 # ----------------------------------------------------------------- 基础工具
 OUT_FIELDS = ["刊名", "ISSN", "eISSN", "新锐分区", "新锐TOP", "新锐学科",
@@ -272,18 +276,40 @@ def build(src_path):
     return merged
 
 
+def _auto_src():
+    """没给源表路径时：在**项目根**找一个唯一的 .xlsx。
+
+    找不到、或有好几个时报错退出 —— 不猜、不写死任何绝对路径。
+    """
+    cands = sorted(f for f in os.listdir(ROOT)
+                   if f.lower().endswith((".xlsx", ".xls")) and not f.startswith("~$"))
+    if len(cands) == 1:
+        print("未指定源表，自动使用项目根下的：%s" % cands[0])
+        return os.path.join(ROOT, cands[0])
+    if not cands:
+        print("项目根下没有 .xlsx —— 请把官方导出的源表放进来，或直接给出路径参数。")
+    else:
+        print("项目根下有多个 .xlsx，请指定要合并哪一个：")
+        for c in cands:
+            print("   ", c)
+    return ""
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="合并官方分区源表 → journal_ranks.csv")
-    ap.add_argument("src", help="源表 .xlsx 路径（四张表那个文件）")
-    ap.add_argument("-o", "--out", default=os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-        "webapp", "config", "journal_ranks.csv"), help="输出 CSV 路径")
+    ap.add_argument("src", nargs="?",
+                    help="源表 .xlsx 路径（四张表那个文件）；省略时自动在项目根找一个 *.xlsx")
+    ap.add_argument("-o", "--out", default=DEFAULT_OUT,
+                    help="输出 CSV 路径（默认 webapp/config/journal_ranks.csv）")
     a = ap.parse_args(argv)
 
-    if not os.path.isfile(a.src):
-        print("源表不存在：%s" % a.src)
+    src = a.src or _auto_src()
+    if not src:
         return 1
-    rows = build(a.src)
+    if not os.path.isfile(src):
+        print("源表不存在：%s" % src)
+        return 1
+    rows = build(src)
     os.makedirs(os.path.dirname(a.out), exist_ok=True)
     with open(a.out, "w", encoding="utf-8-sig", newline="") as f:
         w = csv.DictWriter(f, fieldnames=OUT_FIELDS, extrasaction="ignore")
@@ -293,7 +319,7 @@ def main(argv=None):
     with_issn = sum(1 for r in rows if r["ISSN"])
     print("已写出：%s" % a.out)
     print("共 %d 条（带 ISSN %d 条，含至少一个分区 %d 条）" % (len(rows), with_issn, hit))
-    print("提示：这是授权数据的本地映射表，不要提交或分发。")
+    print("说明：这张表放在 webapp/config/ 下，检索面板会自动加载。")
     return 0
 
 
