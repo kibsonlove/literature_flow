@@ -21,7 +21,7 @@ REM --- Pick an interpreter OUTSIDE webapp\venv if possible -----------
 REM The venv is itself one of the things we may delete, and Windows
 REM refuses to delete a folder that holds the running python.exe.
 set "PYEXE="
-if exist "%USERPROFILE%\.workbuddy\binaries\python\envs\default\Scripts\python.exe" set "PYEXE=%USERPROFILE%\.workbuddy\binaries\python\envs\default\Scripts\python.exe"
+if not defined PYEXE for /f "delims=" %%P in ('py -3 -c "import sys;sys.stdout.write(sys.executable)" 2^>nul') do set "PYEXE=%%P"
 for %%V in (313 312 311 310) do (
     if not defined PYEXE if exist "%LOCALAPPDATA%\Programs\Python\Python%%V\python.exe" set "PYEXE=%LOCALAPPDATA%\Programs\Python\Python%%V\python.exe"
 )
