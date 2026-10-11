@@ -3,21 +3,24 @@
 用法：python scripts/subscribe/lit_watch.py  → 生成 reports/文献订阅_候选清单.md
 配置：关键词写在 lit_keywords.txt（每行一个，本地文件不入库）；SINCE 改这里。
 建议配合 Windows 计划任务定期运行。"""
-import json, urllib.request, urllib.parse, datetime, os, re
+import json, urllib.request, urllib.parse, datetime, os, re, sys
 
 # 从任意工作目录运行都有效：配置文件取脚本所在目录，输出取项目根的 reports/
 _BASE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(os.path.dirname(_BASE))
 
 def _load_keywords():
+    """读本地关键词配置 lit_keywords.txt（不入库）。
+
+    取不到就返回空列表，由 main() 给出明确指引。
+    **绝不回退到占位词** —— 旧版会拿 "your keyword one" 真的去检索，产出一份
+    看着正常、实则毫无意义的清单，下载者还以为功能坏了（2026-10-11 改掉）。
+    """
     try:
-        kws = [l.strip() for l in open(os.path.join(_BASE, "lit_keywords.txt"), encoding="utf-8")
-               if l.strip() and not l.startswith("#")]
-        if kws:
-            return kws
+        with open(os.path.join(_BASE, "lit_keywords.txt"), encoding="utf-8") as f:
+            return [l.strip() for l in f if l.strip() and not l.startswith("#")]
     except Exception:
-        pass
-    return ["your keyword one", "your keyword two"]  # 占位：请在 lit_keywords.txt 填写
+        return []
 
 KEYWORDS = _load_keywords()
 SINCE = "2024-01-01"          # 只看此日期之后发表的
@@ -63,6 +66,11 @@ def fmt(w):
     return f"{star}{title}", pub, doi, src, authors, oa, cited
 
 def main():
+    if not KEYWORDS:
+        print("未配置订阅关键词：请在 %s 下新建 lit_keywords.txt"
+              "（每行一个关键词，# 开头为注释；可复制同目录的 lit_keywords.example.txt）"
+              % _BASE)
+        sys.exit(1)
     seen, blocks = set(), []
     for kw in KEYWORDS:
         try:

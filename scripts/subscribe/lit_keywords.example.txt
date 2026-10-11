@@ -1,6 +1,6 @@
-# 复制本文件为 lit_keywords.txt 后使用。每行一个检索关键词，# 开头的行为注释。
-# 留空（或只留注释）时订阅脚本会使用占位词，不会真正发起检索。
-
-plant remains
-flotation
-crop domestication
+# 复制本文件为 lit_keywords.txt 后填写。每行一个 OpenAlex 检索关键词，# 开头的行为注释。
+# lit_keywords.txt 是本机配置，不入库。未配置时订阅脚本会提示你填写，不会拿占位词去检索。
+#
+# 示例（去掉行首的 # 即可启用；关键词别写太泛，每个词算一次检索请求）：
+# your keyword one
+# your keyword two
